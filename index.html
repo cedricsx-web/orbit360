@@ -1,0 +1,1052 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Orbit 360">
+<meta name="theme-color" content="#0b0d12">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="icon" href="icon-192.png">
+<link rel="manifest" href="manifest.json">
+<title>Orbit 360</title>
+<style>
+  :root {
+    --bg: #0b0d12; --panel: #161a22; --line: #262c38; --text: #eef1f6; --muted: #8b94a5;
+    --accent: #4fd1c5; --accent-ink: #062a27; --warn: #ffb547; --bad: #ff6b6b;
+    --st: env(safe-area-inset-top); --sb: env(safe-area-inset-bottom);
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+    overscroll-behavior: none; -webkit-user-select: none; user-select: none; }
+  button { font: inherit; color: inherit; border: 0; background: none; cursor: pointer; }
+  .screen { position: fixed; inset: 0; display: none; }
+  .screen.on { display: block; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 12px 18px;
+    border-radius: 14px; background: var(--panel); border: 1px solid var(--line); font-weight: 600; }
+  .btn.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+  .btn.ghost { background: rgba(0,0,0,.45); border-color: rgba(255,255,255,.18); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+  .btn.small { padding: 8px 12px; border-radius: 11px; font-size: 14px; }
+  .btn:disabled { opacity: .4; }
+
+  /* Home */
+  #home { overflow-y: auto; -webkit-overflow-scrolling: touch; padding: calc(var(--st) + 20px) 18px calc(var(--sb) + 30px); }
+  .brand { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
+  .brand .logo { width: 40px; height: 40px; border-radius: 12px; background: radial-gradient(circle at 35% 35%, #9ff3ea, #2bb3a6 55%, #0f4d48); position: relative; }
+  .brand .logo::after { content: ""; position: absolute; inset: 9px; border: 2px solid rgba(255,255,255,.85); border-radius: 50%; border-left-color: transparent; border-right-color: transparent; }
+  h1 { font-size: 28px; margin: 0; letter-spacing: -.5px; }
+  .sub { color: var(--muted); margin: 2px 0 22px; }
+  .bigbtn { width: 100%; padding: 18px; font-size: 18px; border-radius: 18px; }
+  .row { display: flex; gap: 10px; margin-top: 10px; }
+  .row > * { flex: 1; }
+  .tips { margin: 22px 0; padding: 14px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; color: #c9d0dc; font-size: 14px; }
+  .tips b { color: var(--text); }
+  .tips ol { margin: 6px 0 0; padding-left: 20px; }
+  .tips li { margin: 4px 0; }
+  h2 { font-size: 17px; margin: 24px 0 10px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .card { position: relative; border-radius: 14px; overflow: hidden; background: var(--panel); border: 1px solid var(--line); aspect-ratio: 2 / 1; }
+  .card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .card span { position: absolute; left: 8px; bottom: 6px; font-size: 11px; background: rgba(0,0,0,.55); padding: 2px 6px; border-radius: 6px; }
+  .empty { color: var(--muted); font-size: 14px; }
+  .err { color: var(--bad); font-size: 14px; margin-top: 12px; white-space: pre-line; }
+
+  /* Capture */
+  #capture { background: #000; }
+  #video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+  #overlay { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+  .topbar { position: absolute; left: 0; right: 0; top: 0; padding: calc(var(--st) + 10px) 12px 10px; display: flex; align-items: center; justify-content: space-between; gap: 8px; z-index: 3; }
+  .pill { background: rgba(0,0,0,.55); padding: 7px 12px; border-radius: 999px; font-weight: 600; font-size: 14px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+  .bottombar { position: absolute; left: 0; right: 0; bottom: 0; padding: 10px 12px calc(var(--sb) + 14px); display: flex; align-items: flex-end; justify-content: space-between; gap: 10px; z-index: 3; }
+  #minimap { width: 150px; height: 75px; border-radius: 10px; background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.2); }
+  #hint { position: absolute; left: 16px; right: 16px; top: calc(var(--st) + 64px); text-align: center; z-index: 3; pointer-events: none; }
+  #hint span { display: inline-block; background: rgba(0,0,0,.6); padding: 8px 14px; border-radius: 12px; font-size: 15px; }
+  #flash { position: absolute; inset: 0; background: #fff; opacity: 0; pointer-events: none; transition: opacity .25s; z-index: 4; }
+  .sheet { position: absolute; left: 12px; right: 12px; bottom: calc(var(--sb) + 14px); background: rgba(14,17,23,.94); border: 1px solid var(--line); border-radius: 20px; padding: 18px; z-index: 5; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  .sheet h3 { margin: 0 0 6px; font-size: 18px; }
+  .sheet p { margin: 0 0 14px; color: #c9d0dc; font-size: 14px; }
+  #rotateWarn { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; text-align: center; background: rgba(0,0,0,.85); z-index: 9; padding: 30px; font-size: 18px; }
+
+  /* Stitch */
+  #stitch { display: none; align-items: center; justify-content: center; flex-direction: column; padding: 30px; text-align: center; }
+  #stitch.on { display: flex; }
+  .bar { width: 100%; max-width: 320px; height: 8px; background: var(--panel); border-radius: 99px; overflow: hidden; margin: 16px 0 8px; }
+  .bar > i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+  #stitchMsg { color: var(--muted); font-size: 14px; }
+  .spinner { width: 54px; height: 54px; border-radius: 50%; border: 4px solid var(--line); border-top-color: var(--accent); animation: spin 1s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Viewer */
+  #viewer { background: #000; }
+  #glcanvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; display: block; }
+  #viewer .bottombar { justify-content: center; flex-wrap: wrap; }
+  .toggle.on { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
+  label.field { display: block; margin: 10px 0; font-size: 14px; color: #c9d0dc; }
+  label.field input[type=range] { width: 100%; accent-color: var(--accent); }
+  label.field select { width: 100%; margin-top: 4px; padding: 8px; border-radius: 10px; background: var(--panel); color: var(--text); border: 1px solid var(--line); font: inherit; }
+  .chk { display: flex; align-items: center; gap: 8px; font-size: 14px; color: #c9d0dc; margin: 8px 0 14px; }
+  .toast { position: fixed; left: 50%; top: calc(var(--st) + 70px); transform: translateX(-50%); background: rgba(20,24,32,.95); border: 1px solid var(--line); padding: 10px 16px; border-radius: 12px; z-index: 50; font-size: 14px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90%; text-align: center; }
+  .toast.on { opacity: 1; }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; align-items: flex-end; z-index: 40; }
+  .modal.on { display: flex; }
+  .modal .sheet { position: relative; left: auto; right: auto; bottom: auto; margin: 12px; margin-bottom: calc(var(--sb) + 12px); width: 100%; }
+</style>
+</head>
+<body>
+
+<!-- ================= HOME ================= -->
+<section id="home" class="screen on">
+  <div class="brand"><div class="logo"></div><h1>Orbit 360</h1></div>
+  <p class="sub">Free 360° photo spheres from your iPhone.</p>
+
+  <button id="btnNew" class="btn primary bigbtn">◎&nbsp; New 360° photo</button>
+  <div class="row">
+    <label class="btn"><input id="importFile" type="file" accept="image/*" hidden>Open a 360 image</label>
+  </div>
+  <div id="homeErr" class="err"></div>
+
+  <div class="tips">
+    <b>How to get a clean sphere</b>
+    <ol>
+      <li>Hold the phone <b>upright (portrait)</b>.</li>
+      <li>Turn <b>around the camera lens</b>, not around your body. Pivot your wrist, keep your feet still.</li>
+      <li>Aim the centre ring at each white dot and <b>hold still</b>. The photo is taken automatically.</li>
+      <li>Do the horizon row first, then tilt up and down. Finish with straight up and straight down.</li>
+      <li>Good light helps. Moving people will show up as ghosts.</li>
+    </ol>
+  </div>
+
+  <h2>Your spheres</h2>
+  <div id="gallery" class="grid"></div>
+  <p id="galleryEmpty" class="empty">No photos yet. Your 360° photos are kept on this phone.</p>
+</section>
+
+<!-- ================= CAPTURE ================= -->
+<section id="capture" class="screen">
+  <video id="video" playsinline muted autoplay></video>
+  <canvas id="overlay"></canvas>
+  <div id="flash"></div>
+  <div class="topbar">
+    <button id="btnCancel" class="btn ghost small">✕ Cancel</button>
+    <div id="count" class="pill">0 / 30</div>
+    <button id="btnUndo" class="btn ghost small" disabled>↶ Undo</button>
+  </div>
+  <div id="hint"><span id="hintText">Aim at the white dot</span></div>
+  <div class="bottombar">
+    <canvas id="minimap" width="300" height="150"></canvas>
+    <button id="btnDone" class="btn primary" disabled>Stitch ➜</button>
+  </div>
+  <div id="startSheet" class="sheet">
+    <h3>Ready?</h3>
+    <p>Stand where you want the centre of your sphere. Hold the phone upright at eye level and point it straight ahead at the horizon. That direction becomes the front of your photo.</p>
+    <button id="btnStart" class="btn primary bigbtn">Start capturing</button>
+  </div>
+  <div id="rotateWarn">Please hold your phone upright (portrait).</div>
+</section>
+
+<!-- ================= STITCHING ================= -->
+<section id="stitch" class="screen">
+  <div class="spinner"></div>
+  <h3 style="margin:18px 0 0">Stitching your sphere…</h3>
+  <div class="bar"><i id="stitchBar"></i></div>
+  <div id="stitchMsg">Preparing…</div>
+</section>
+
+<!-- ================= VIEWER ================= -->
+<section id="viewer" class="screen">
+  <canvas id="glcanvas"></canvas>
+  <div class="topbar">
+    <button id="btnBack" class="btn ghost small">‹ Back</button>
+    <div id="viewerTitle" class="pill">360°</div>
+    <button id="btnGyro" class="btn ghost small toggle">Gyro</button>
+  </div>
+  <div class="bottombar">
+    <button id="btnSave" class="btn primary small">Save / Share</button>
+    <button id="btnFlat" class="btn ghost small">Flat view</button>
+    <button id="btnAdjust" class="btn ghost small">Adjust</button>
+    <button id="btnDelete" class="btn ghost small">Delete</button>
+  </div>
+</section>
+
+<!-- Adjust sheet -->
+<div id="adjustModal" class="modal">
+  <div class="sheet">
+    <h3>Adjust stitching</h3>
+    <p>If straight lines are doubled or bent at the seams, try a different lens field of view and re-stitch.</p>
+    <label class="field">Lens field of view: <b id="fovVal">70°</b>
+      <input id="fovRange" type="range" min="50" max="90" step="0.5" value="70">
+    </label>
+    <label class="field">Resolution
+      <select id="resSel">
+        <option value="2048">Standard: 2048 × 1024 (fast)</option>
+        <option value="3072" selected>High: 3072 × 1536</option>
+        <option value="4096">Max: 4096 × 2048 (uses a lot of memory)</option>
+      </select>
+    </label>
+    <label class="chk"><input id="gainChk" type="checkbox" checked> Even out brightness between shots</label>
+    <div class="row">
+      <button id="btnAuto" class="btn">Auto-detect lens</button>
+      <button id="btnRestitch" class="btn primary">Re-stitch</button>
+    </div>
+    <div class="row"><button id="btnAdjustClose" class="btn">Close</button></div>
+  </div>
+</div>
+
+<!-- Flat image modal -->
+<div id="flatModal" class="modal" style="align-items:center">
+  <div class="sheet" style="padding:10px">
+    <img id="flatImg" style="width:100%;border-radius:12px;display:block" alt="Flat 360 panorama">
+    <p style="margin:10px 4px 6px;font-size:13px">This is the flat (equirectangular) version. It's what Facebook, Google Photos and VR viewers read as a 360° photo.</p>
+    <button id="btnFlatClose" class="btn" style="width:100%">Close</button>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+'use strict';
+/* =====================================================================
+   Orbit 360: guided 360° capture + spherical stitching, 100% in-browser.
+   World frame: x = east, y = north, z = up (W3C DeviceOrientation).
+   Device frame: x = right, y = top of screen, z = out of screen.
+   The rear camera looks along device -z.
+   ===================================================================== */
+
+const $ = (s) => document.querySelector(s);
+const D2R = Math.PI / 180, R2D = 180 / Math.PI;
+const FRAME_LONG = 960;          // long side (px) of each stored shot
+const ALIGN_DEG = 3.5;           // how close to a dot before capturing
+const HOLD_MS = 380;             // how long to hold still
+const MAX_SPEED = 9;             // deg/s considered "still"
+
+function store(key, val) { try { if (val === undefined) return localStorage.getItem(key); localStorage.setItem(key, val); } catch (e) { return null; } }
+
+/* ---------------- math ---------------- */
+function rotFromEuler(alpha, beta, gamma) {
+  const x = beta * D2R, y = gamma * D2R, z = alpha * D2R;
+  const cX = Math.cos(x), cY = Math.cos(y), cZ = Math.cos(z);
+  const sX = Math.sin(x), sY = Math.sin(y), sZ = Math.sin(z);
+  // R = Rz(alpha) * Rx(beta) * Ry(gamma); maps device vectors into world vectors. Row-major.
+  return [
+    cZ * cY - sZ * sX * sY, -cX * sZ, cY * sZ * sX + cZ * sY,
+    cY * sZ + cZ * sX * sY,  cZ * cX, sZ * sY - cZ * cY * sX,
+    -cX * sY,                sX,      cX * cY
+  ];
+}
+function mul3(A, B) {
+  const C = new Array(9);
+  for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++)
+    C[i * 3 + j] = A[i * 3] * B[j] + A[i * 3 + 1] * B[3 + j] + A[i * 3 + 2] * B[6 + j];
+  return C;
+}
+function yawMat(a) { const c = Math.cos(a), s = Math.sin(a); return [c, -s, 0, s, c, 0, 0, 0, 1]; } // removes yaw a
+function forwardOf(R) { return [-R[2], -R[5], -R[8]]; }
+function toDevice(R, v) { return [R[0] * v[0] + R[3] * v[1] + R[6] * v[2], R[1] * v[0] + R[4] * v[1] + R[7] * v[2], R[2] * v[0] + R[5] * v[1] + R[8] * v[2]]; }
+function yawOf(v) { return Math.atan2(v[0], v[1]); }
+function pitchOf(v) { return Math.asin(Math.max(-1, Math.min(1, v[2]))); }
+function dirFrom(yaw, pitch) { const c = Math.cos(pitch); return [c * Math.sin(yaw), c * Math.cos(yaw), Math.sin(pitch)]; }
+function angleBetween(a, b) { return Math.acos(Math.max(-1, Math.min(1, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]))); }
+function wrapDeg(d) { d = ((d + 180) % 360 + 360) % 360 - 180; return d; }
+
+/* ---------------- motion sensors ---------------- */
+let ori = null;                       // latest {R, t}
+window.addEventListener('deviceorientation', (e) => {
+  if (e.alpha == null || e.beta == null || e.gamma == null) return;
+  ori = { R: rotFromEuler(e.alpha, e.beta, e.gamma), t: performance.now() };
+}, true);
+
+async function ensureMotion() {
+  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    const res = await DeviceOrientationEvent.requestPermission();
+    if (res !== 'granted') throw new Error('Motion & orientation access was refused.\nOrbit 360 needs it to know where the camera points. Close the app, open it again and tap "Allow".');
+  }
+  const t0 = performance.now();
+  while (!ori && performance.now() - t0 < 2000) await new Promise(r => setTimeout(r, 50));
+  if (!ori) throw new Error('No motion-sensor data. Use this app on a phone (iPhone Safari), opened from an https:// address.');
+}
+
+/* ---------------- UI helpers ---------------- */
+function show(id) { document.querySelectorAll('.screen').forEach(s => s.classList.toggle('on', s.id === id)); }
+let toastTimer;
+function toast(msg, ms = 2200) { const t = $('#toast'); t.textContent = msg; t.classList.add('on'); clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('on'), ms); }
+
+/* ---------------- gallery (IndexedDB) ---------------- */
+const DB = {
+  db: null,
+  open() {
+    if (this.db) return Promise.resolve(this.db);
+    return new Promise((res, rej) => {
+      let req;
+      try { req = indexedDB.open('orbit360', 1); } catch (e) { return rej(e); }
+      req.onupgradeneeded = () => req.result.createObjectStore('panos', { keyPath: 'id' });
+      req.onsuccess = () => { this.db = req.result; res(this.db); };
+      req.onerror = () => rej(req.error);
+    });
+  },
+  async tx(mode, fn) {
+    const db = await this.open();
+    return new Promise((res, rej) => {
+      const t = db.transaction('panos', mode); const st = t.objectStore('panos');
+      const r = fn(st); t.oncomplete = () => res(r && r.result); t.onerror = () => rej(t.error);
+    });
+  },
+  put(item) { return this.tx('readwrite', st => st.put(item)); },
+  del(id) { return this.tx('readwrite', st => st.delete(id)); },
+  all() { return this.tx('readonly', st => st.getAll()); }
+};
+
+let thumbUrls = [];
+async function renderGallery() {
+  const g = $('#gallery');
+  thumbUrls.forEach(u => URL.revokeObjectURL(u)); thumbUrls = [];
+  g.innerHTML = '';
+  let items = [];
+  try { items = await DB.all() || []; } catch (e) { items = []; }
+  items.sort((a, b) => b.id - a.id);
+  $('#galleryEmpty').style.display = items.length ? 'none' : 'block';
+  for (const it of items) {
+    const u = URL.createObjectURL(it.thumb || it.blob); thumbUrls.push(u);
+    const d = document.createElement('button'); d.className = 'card';
+    const when = new Date(it.id);
+    d.innerHTML = `<img alt="360 photo" src="${u}"><span>${when.toLocaleDateString()} ${when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>`;
+    d.onclick = () => openViewer(it, false);
+    g.appendChild(d);
+  }
+}
+
+/* =====================================================================
+   CAPTURE
+   ===================================================================== */
+const video = $('#video'), overlay = $('#overlay'), octx = overlay.getContext('2d');
+const mm = $('#minimap'), mctx = mm.getContext('2d');
+const grab = document.createElement('canvas'), gctx = grab.getContext('2d', { willReadFrequently: true });
+let stream = null, targets = [], frames = [], yaw0 = null, capturing = false, rafId = 0;
+let holdStart = 0, lastF = null, lastT = 0, speed = 0;
+let fovLong = parseFloat(store('fovLong')) || 70;
+
+function makeTargets() {
+  const t = [];
+  for (let i = 0; i < 12; i++) t.push({ yaw: i * 30, pitch: 0 });
+  for (let i = 0; i < 8; i++) t.push({ yaw: i * 45 + 22.5, pitch: 45 });
+  for (let i = 0; i < 8; i++) t.push({ yaw: i * 45, pitch: -45 });
+  t.push({ yaw: 0, pitch: 90 });
+  t.push({ yaw: 0, pitch: -90 });
+  return t.map(o => ({ ...o, dir: dirFrom(o.yaw * D2R, o.pitch * D2R), done: false }));
+}
+
+function camTan() {
+  const vw = video.videoWidth || 3, vh = video.videoHeight || 4, L = Math.max(vw, vh);
+  const tl = Math.tan(fovLong * D2R / 2);
+  return { tx: tl * vw / L, ty: tl * vh / L };
+}
+function relR() { return mul3(yawMat(yaw0 || 0), ori.R); }
+
+async function startCapture() {
+  $('#homeErr').textContent = '';
+  if (!window.isSecureContext) { $('#homeErr').textContent = 'This page must be opened over https:// for the camera and motion sensors to work.'; return; }
+  try {
+    await ensureMotion();
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: false,
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } }
+    });
+  } catch (e) {
+    const msg = (e && e.name === 'NotAllowedError') ? 'Camera access was refused. Allow camera access for this site (Settings › Safari › Camera) and try again.' : (e.message || String(e));
+    $('#homeErr').textContent = msg; stopStream(); return;
+  }
+  video.srcObject = stream;
+  try { await video.play(); } catch (e) {}
+  targets = makeTargets(); frames = []; yaw0 = null; holdStart = 0; lastF = null;
+  $('#startSheet').style.display = 'block';
+  $('#hint').style.display = 'none';
+  updateCount();
+  show('capture');
+  capturing = true; resizeOverlay();
+  cancelAnimationFrame(rafId); rafId = requestAnimationFrame(tick);
+}
+
+function stopStream() {
+  capturing = false; cancelAnimationFrame(rafId);
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = null; video.srcObject = null;
+}
+
+function resizeOverlay() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 3);
+  overlay.width = Math.round(overlay.clientWidth * dpr); overlay.height = Math.round(overlay.clientHeight * dpr);
+  octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const portrait = window.innerHeight >= window.innerWidth;
+  $('#rotateWarn').style.display = (capturing && !portrait) ? 'flex' : 'none';
+}
+window.addEventListener('resize', () => { if (capturing) resizeOverlay(); if (viewer) viewer.resize(); });
+
+function videoRect() {
+  const cw = overlay.clientWidth, ch = overlay.clientHeight;
+  const vw = video.videoWidth || 3, vh = video.videoHeight || 4;
+  const s = Math.min(cw / vw, ch / vh);
+  const w = vw * s, h = vh * s;
+  return { x: (cw - w) / 2, y: (ch - h) / 2, w, h };
+}
+
+function updateCount() {
+  const n = targets.filter(t => t.done).length;
+  $('#count').textContent = `${n} / ${targets.length}`;
+  $('#btnUndo').disabled = frames.length === 0;
+  $('#btnDone').disabled = frames.length < 2;
+}
+
+function nearestTarget(f) {
+  let best = null, bestA = Infinity;
+  for (const t of targets) if (!t.done) { const a = angleBetween(f, t.dir); if (a < bestA) { bestA = a; best = t; } }
+  return { t: best, a: bestA };
+}
+
+function tick(now) {
+  if (!capturing) return;
+  rafId = requestAnimationFrame(tick);
+  const cw = overlay.clientWidth, ch = overlay.clientHeight;
+  octx.clearRect(0, 0, cw, ch);
+  if (!ori || !video.videoWidth) return;
+
+  const R = relR();
+  const f = forwardOf(R);
+  // angular speed (smoothed)
+  if (lastF) {
+    const dt = Math.max(1, now - lastT) / 1000;
+    const inst = angleBetween(f, lastF) * R2D / dt;
+    speed = speed * 0.7 + inst * 0.3;
+  }
+  lastF = f; lastT = now;
+
+  const { tx, ty } = camTan();
+  const vr = videoRect();
+  const project = (dir) => {
+    const d = toDevice(R, dir);
+    if (d[2] >= -0.05) return null;
+    const px = d[0] / -d[2] / tx, py = d[1] / -d[2] / ty;
+    return { x: vr.x + (px + 1) / 2 * vr.w, y: vr.y + (1 - py) / 2 * vr.h, px, py };
+  };
+
+  // frame of the camera view
+  octx.strokeStyle = 'rgba(255,255,255,.15)'; octx.lineWidth = 1;
+  octx.strokeRect(vr.x + .5, vr.y + .5, vr.w - 1, vr.h - 1);
+
+  // dots
+  for (const t of targets) {
+    const p = project(t.dir);
+    if (!p || Math.abs(p.px) > 1.6 || Math.abs(p.py) > 1.6) continue;
+    octx.beginPath();
+    if (t.done) { octx.fillStyle = 'rgba(79,209,197,.85)'; octx.arc(p.x, p.y, 7, 0, Math.PI * 2); octx.fill(); }
+    else { octx.fillStyle = 'rgba(255,255,255,.95)'; octx.arc(p.x, p.y, 13, 0, Math.PI * 2); octx.fill();
+      octx.beginPath(); octx.strokeStyle = 'rgba(0,0,0,.35)'; octx.lineWidth = 2; octx.arc(p.x, p.y, 13, 0, Math.PI * 2); octx.stroke(); }
+  }
+
+  const cx = vr.x + vr.w / 2, cy = vr.y + vr.h / 2;
+  const { t: best, a } = yaw0 === null ? { t: null, a: Infinity } : nearestTarget(f);
+
+  // reticle
+  octx.lineWidth = 3;
+  octx.strokeStyle = 'rgba(255,255,255,.9)';
+  octx.beginPath(); octx.arc(cx, cy, 24, 0, Math.PI * 2); octx.stroke();
+
+  if (best) {
+    const aDeg = a * R2D;
+    const aligned = aDeg < ALIGN_DEG, still = speed < MAX_SPEED;
+    if (aligned && still) {
+      if (!holdStart) holdStart = now;
+      const prog = Math.min(1, (now - holdStart) / HOLD_MS);
+      octx.strokeStyle = '#4fd1c5'; octx.lineWidth = 6;
+      octx.beginPath(); octx.arc(cx, cy, 24, -Math.PI / 2, -Math.PI / 2 + prog * Math.PI * 2); octx.stroke();
+      if (prog >= 1) { takeShot(best, R); holdStart = 0; }
+    } else holdStart = 0;
+
+    // arrow toward target when it's not close
+    const p = project(best.dir);
+    const onScreen = p && Math.abs(p.px) < 0.9 && Math.abs(p.py) < 0.9;
+    if (!onScreen || aDeg > 12) {
+      const d = toDevice(R, best.dir);
+      let ang = Math.atan2(-d[1] / ty, d[0] / tx);
+      if (Math.hypot(d[0], d[1]) < 1e-3) ang = -Math.PI / 2;
+      drawArrow(cx, cy, ang);
+    }
+    $('#hintText').textContent = hintFor(best, f, aligned, still);
+  }
+  drawMinimap(f);
+}
+
+function hintFor(t, f, aligned, still) {
+  if (aligned && !still) return 'Hold still…';
+  if (aligned) return 'Hold…';
+  if (t.pitch === 90) return 'Point straight up at the sky / ceiling';
+  if (t.pitch === -90) return 'Point straight down at your feet';
+  const dp = t.pitch - pitchOf(f) * R2D;
+  if (Math.abs(dp) > 20) return dp > 0 ? 'Tilt up to the next row' : 'Tilt down to the next row';
+  return 'Turn to the white dot and hold still';
+}
+
+function drawArrow(cx, cy, ang) {
+  const r = 70;
+  octx.save(); octx.translate(cx + Math.cos(ang) * r, cy + Math.sin(ang) * r); octx.rotate(ang);
+  octx.fillStyle = 'rgba(255,255,255,.95)';
+  octx.beginPath(); octx.moveTo(18, 0); octx.lineTo(-10, -14); octx.lineTo(-4, 0); octx.lineTo(-10, 14); octx.closePath(); octx.fill();
+  octx.restore();
+}
+
+function drawMinimap(f) {
+  const W = mm.width, H = mm.height;
+  mctx.clearRect(0, 0, W, H);
+  mctx.strokeStyle = 'rgba(255,255,255,.12)'; mctx.lineWidth = 1;
+  for (let k = 1; k < 4; k++) { mctx.beginPath(); mctx.moveTo(0, H * k / 4); mctx.lineTo(W, H * k / 4); mctx.stroke(); }
+  mctx.beginPath(); mctx.moveTo(W / 2, 0); mctx.lineTo(W / 2, H); mctx.stroke();
+  const pos = (yawD, pitchD) => [(wrapDeg(yawD) + 180) / 360 * W, (90 - pitchD) / 180 * H];
+  for (const t of targets) {
+    const [x, y] = pos(t.yaw, Math.max(-84, Math.min(84, t.pitch)));
+    mctx.fillStyle = t.done ? '#4fd1c5' : 'rgba(255,255,255,.55)';
+    mctx.beginPath(); mctx.arc(x, y, t.done ? 6 : 4, 0, Math.PI * 2); mctx.fill();
+  }
+  if (yaw0 !== null) {
+    const [x, y] = pos(yawOf(f) * R2D, pitchOf(f) * R2D);
+    mctx.strokeStyle = '#ffb547'; mctx.lineWidth = 3;
+    mctx.beginPath(); mctx.arc(x, y, 9, 0, Math.PI * 2); mctx.stroke();
+  }
+}
+
+function takeShot(target, R) {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  const s = Math.min(1, FRAME_LONG / Math.max(vw, vh));
+  const w = Math.round(vw * s), h = Math.round(vh * s);
+  grab.width = w; grab.height = h;
+  gctx.drawImage(video, 0, 0, w, h);
+  const img = gctx.getImageData(0, 0, w, h);
+  frames.push({ w, h, data: img.data, R: R.slice(), target });
+  target.done = true;
+  const fl = $('#flash'); fl.style.transition = 'none'; fl.style.opacity = '.55';
+  requestAnimationFrame(() => { fl.style.transition = 'opacity .3s'; fl.style.opacity = '0'; });
+  updateCount();
+  if (targets.every(t => t.done)) setTimeout(finishCapture, 250);
+}
+
+$('#btnStart').onclick = () => {
+  if (!ori) { toast('Waiting for motion sensors…'); return; }
+  const f = forwardOf(ori.R);
+  if (Math.abs(pitchOf(f) * R2D) > 25) { toast('Point the phone at the horizon (hold it upright), then tap Start.'); return; }
+  yaw0 = yawOf(f);
+  $('#startSheet').style.display = 'none';
+  $('#hint').style.display = 'block';
+};
+$('#btnUndo').onclick = () => { const fr = frames.pop(); if (fr) fr.target.done = false; updateCount(); };
+$('#btnCancel').onclick = () => {
+  if (frames.length > 3) { askConfirm('Discard this capture?', 'Discard').then(ok => { if (ok) { stopStream(); frames = []; show('home'); } }); return; }
+  stopStream(); frames = []; show('home');
+};
+$('#btnDone').onclick = () => finishCapture();
+
+function askConfirm(text, okLabel) {
+  return new Promise(res => {
+    const m = document.createElement('div'); m.className = 'modal on';
+    m.innerHTML = `<div class="sheet"><h3>${text}</h3><div class="row"><button class="btn" data-v="0">Keep</button><button class="btn primary" data-v="1">${okLabel}</button></div></div>`;
+    m.onclick = (e) => { const v = e.target.getAttribute && e.target.getAttribute('data-v'); if (v !== null && v !== undefined) { m.remove(); res(v === '1'); } };
+    document.body.appendChild(m);
+  });
+}
+
+/* =====================================================================
+   STITCHING (runs in a Web Worker)
+   ===================================================================== */
+function workerMain() {
+  const PI = Math.PI;
+  let frames = [];
+
+  self.onmessage = (ev) => {
+    const m = ev.data;
+    if (m.type === 'frames') { frames = m.frames; return; }
+    if (m.type === 'stitch') {
+      try {
+        const out = stitch(frames, m.opts, (stage, p) => self.postMessage({ type: 'progress', stage, p }));
+        self.postMessage({ type: 'done', W: out.W, H: out.H, fov: out.fov, data: out.data }, [out.data.buffer]);
+      } catch (err) {
+        self.postMessage({ type: 'error', message: String((err && err.message) || err) });
+      }
+    }
+  };
+
+  function tables(W, H) {
+    const sinLat = new Float64Array(H), cosLat = new Float64Array(H), sinLon = new Float64Array(W), cosLon = new Float64Array(W);
+    for (let j = 0; j < H; j++) { const lat = PI / 2 - (j + 0.5) / H * PI; sinLat[j] = Math.sin(lat); cosLat[j] = Math.cos(lat); }
+    for (let i = 0; i < W; i++) { const lon = (i + 0.5) / W * 2 * PI - PI; sinLon[i] = Math.sin(lon); cosLon[i] = Math.cos(lon); }
+    return { sinLat, cosLat, sinLon, cosLon };
+  }
+
+  function frameParams(f, fovLongRad) {
+    const tl = Math.tan(fovLongRad / 2), L = Math.max(f.w, f.h);
+    return { tx: tl * f.w / L, ty: tl * f.h / L };
+  }
+
+  // Visit every output pixel covered by frame f: visit(pixelIndex, r, g, b, weight)
+  function rasterize(f, tx, ty, W, H, tabs, visit) {
+    const R = f.R;
+    const cx = -R[2], cy = -R[5], cz = -R[8];
+    const latc = Math.asin(Math.max(-1, Math.min(1, cz)));
+    const lonc = Math.atan2(cx, cy);
+    const r = Math.atan(Math.hypot(tx, ty)) + 0.02;
+    const latTop = latc + r, latBot = latc - r;
+    const j0 = Math.max(0, Math.floor((PI / 2 - latTop) / PI * H));
+    const j1 = Math.min(H - 1, Math.ceil((PI / 2 - latBot) / PI * H));
+    let full = latTop >= PI / 2 || latBot <= -PI / 2, dlon = PI;
+    if (!full) { const s = Math.sin(r) / Math.cos(latc); if (s >= 1) full = true; else dlon = Math.asin(s) + 0.02; }
+    let i0 = 0, n = W;
+    if (!full) { i0 = Math.floor((lonc - dlon + PI) / (2 * PI) * W); n = Math.min(W, Math.ceil(dlon / PI * W) + 2); }
+    const { sinLat, cosLat, sinLon, cosLon } = tabs;
+    const fw = f.w, fh = f.h, data = f.data;
+    const r0 = R[0], r1 = R[1], r2 = R[2], r3 = R[3], r4 = R[4], r5 = R[5], r6 = R[6], r7 = R[7], r8 = R[8];
+    for (let j = j0; j <= j1; j++) {
+      const sl = sinLat[j], cl = cosLat[j], row = j * W;
+      for (let k = 0; k < n; k++) {
+        let i = i0 + k; i = ((i % W) + W) % W;
+        const wx = cl * sinLon[i], wy = cl * cosLon[i], wz = sl;
+        const dz = r2 * wx + r5 * wy + r8 * wz;
+        if (dz >= -1e-6) continue;
+        const inv = -1 / dz;
+        const px = (r0 * wx + r3 * wy + r6 * wz) * inv / tx;
+        if (px <= -1 || px >= 1) continue;
+        const py = (r1 * wx + r4 * wy + r7 * wz) * inv / ty;
+        if (py <= -1 || py >= 1) continue;
+        let wt = (1 - px * px) * (1 - py * py); wt = wt * wt * wt;
+        const u = (px + 1) * 0.5 * fw - 0.5, v = (1 - py) * 0.5 * fh - 0.5;
+        let x0 = Math.floor(u), y0 = Math.floor(v);
+        const ax = u - x0, ay = v - y0;
+        let x1 = x0 + 1, y1 = y0 + 1;
+        if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0; if (x1 > fw - 1) x1 = fw - 1; if (y1 > fh - 1) y1 = fh - 1;
+        if (x0 > fw - 1) x0 = fw - 1; if (y0 > fh - 1) y0 = fh - 1;
+        const p00 = (y0 * fw + x0) * 4, p10 = (y0 * fw + x1) * 4, p01 = (y1 * fw + x0) * 4, p11 = (y1 * fw + x1) * 4;
+        const b00 = (1 - ax) * (1 - ay), b10 = ax * (1 - ay), b01 = (1 - ax) * ay, b11 = ax * ay;
+        visit(row + i,
+          data[p00] * b00 + data[p10] * b10 + data[p01] * b01 + data[p11] * b11,
+          data[p00 + 1] * b00 + data[p10 + 1] * b10 + data[p01 + 1] * b01 + data[p11 + 1] * b11,
+          data[p00 + 2] * b00 + data[p10 + 2] * b10 + data[p01 + 2] * b01 + data[p11 + 2] * b11,
+          wt);
+      }
+    }
+  }
+
+  function accumulate(frames, params, gains, W, H, tabs, onFrame) {
+    const acc = new Float32Array(W * H * 4);
+    for (let k = 0; k < frames.length; k++) {
+      const g = gains[k];
+      rasterize(frames[k], params[k].tx, params[k].ty, W, H, tabs, (p, r, gg, b, wt) => {
+        const q = p * 4; acc[q] += r * g[0] * wt; acc[q + 1] += gg * g[1] * wt; acc[q + 2] += b * g[2] * wt; acc[q + 3] += wt;
+      });
+      if (onFrame) onFrame(k + 1, frames.length);
+    }
+    return acc;
+  }
+
+  // Per-shot colour gains so neighbouring shots agree in their overlaps (auto-exposure differences).
+  function estimateGains(frames, params) {
+    const W = 512, H = 256, tabs = tables(W, H);
+    let gains = frames.map(() => [1, 1, 1]);
+    for (let it = 0; it < 5; it++) {
+      const acc = accumulate(frames, params, gains, W, H, tabs);
+      const ng = frames.map((f, k) => {
+        const g = gains[k], sm = [0, 0, 0], sf = [0, 0, 0];
+        rasterize(f, params[k].tx, params[k].ty, W, H, tabs, (p, r, gg, b, wt) => {
+          const q = p * 4, others = acc[q + 3] - wt;
+          if (others < 1e-4) return;
+          const w2 = wt * others;
+          sm[0] += (acc[q] - r * g[0] * wt) / others * w2;
+          sm[1] += (acc[q + 1] - gg * g[1] * wt) / others * w2;
+          sm[2] += (acc[q + 2] - b * g[2] * wt) / others * w2;
+          sf[0] += r * w2; sf[1] += gg * w2; sf[2] += b * w2;
+        });
+        return [0, 1, 2].map(c => {
+          if (sf[c] < 1e-3 || sm[c] < 1e-3) return g[c];
+          return Math.sqrt(g[c] * (sm[c] / sf[c]));       // damped update
+        });
+      });
+      for (let c = 0; c < 3; c++) {
+        let lg = 0; ng.forEach(g => lg += Math.log(g[c]));
+        const m = Math.exp(lg / ng.length);
+        ng.forEach(g => { g[c] = Math.min(2, Math.max(0.5, g[c] / m)); });
+      }
+      gains = ng;
+    }
+    return gains;
+  }
+
+  // Lower = shots agree better in their overlaps.
+  function overlapScore(frames, fovRad, gains, W, H, tabs) {
+    const params = frames.map(f => frameParams(f, fovRad));
+    const S1 = new Float32Array(W * H), S2 = new Float32Array(W * H), N = new Uint8Array(W * H);
+    for (let k = 0; k < frames.length; k++) {
+      const g = gains[k];
+      rasterize(frames[k], params[k].tx, params[k].ty, W, H, tabs, (p, r, gg, b) => {
+        const l = 0.299 * r * g[0] + 0.587 * gg * g[1] + 0.114 * b * g[2];
+        S1[p] += l; S2[p] += l * l; if (N[p] < 255) N[p]++;
+      });
+    }
+    let tot = 0, cnt = 0;
+    for (let p = 0; p < W * H; p++) if (N[p] >= 2) { const m = S1[p] / N[p]; tot += S2[p] / N[p] - m * m; cnt++; }
+    return cnt > 300 ? tot / cnt : Infinity;
+  }
+
+  function calibrateFov(frames, progress) {
+    const W = 768, H = 384, tabs = tables(W, H);
+    const gains = estimateGains(frames, frames.map(f => frameParams(f, 70 * PI / 180)));
+    const evalF = (deg) => overlapScore(frames, deg * PI / 180, gains, W, H, tabs);
+    let best = 70, bestS = Infinity, step = 0;
+    const coarse = []; for (let d = 52; d <= 88; d += 3) coarse.push(d);
+    coarse.forEach((d, idx) => { const s = evalF(d); if (s < bestS) { bestS = s; best = d; } progress('Measuring your lens…', (++step) / (coarse.length + 12)); });
+    const lo = best - 3, hi = best + 3;
+    for (let d = lo; d <= hi + 1e-9; d += 0.5) { const s = evalF(d); if (s < bestS) { bestS = s; best = d; } progress('Measuring your lens…', (++step) / (coarse.length + 12)); }
+    return best;
+  }
+
+  // Fill pixels nobody photographed (usually right under your feet) with a smooth blur of their surroundings.
+  function fillHoles(img, W, H) {
+    let holes = false;
+    for (let p = 0; p < W * H; p++) if (img[p * 4 + 3] === 0) { holes = true; break; }
+    if (!holes) return;
+    const levels = [{ c: img, w: W, h: H }];
+    for (;;) {
+      const L = levels[levels.length - 1];
+      let any = false;
+      for (let p = 0; p < L.w * L.h; p++) if (L.c[p * 4 + 3] === 0) { any = true; break; }
+      if (!any || (L.w <= 2 && L.h <= 2)) break;
+      const nw = Math.max(1, Math.ceil(L.w / 2)), nh = Math.max(1, Math.ceil(L.h / 2));
+      const c = new Float32Array(nw * nh * 4);
+      for (let y = 0; y < nh; y++) for (let x = 0; x < nw; x++) {
+        let r = 0, g = 0, b = 0, n = 0;
+        for (let dy = 0; dy < 2; dy++) for (let dx = 0; dx < 2; dx++) {
+          const sx = 2 * x + dx, sy = 2 * y + dy;
+          if (sx >= L.w || sy >= L.h) continue;
+          const q = (sy * L.w + sx) * 4;
+          if (L.c[q + 3] === 0) continue;
+          r += L.c[q]; g += L.c[q + 1]; b += L.c[q + 2]; n++;
+        }
+        const q = (y * nw + x) * 4;
+        if (n) { c[q] = r / n; c[q + 1] = g / n; c[q + 2] = b / n; c[q + 3] = 1; }
+      }
+      levels.push({ c, w: nw, h: nh });
+    }
+    const top = levels[levels.length - 1];
+    let mr = 0, mg = 0, mb = 0, mn = 0;
+    for (let p = 0; p < top.w * top.h; p++) if (top.c[p * 4 + 3]) { mr += top.c[p * 4]; mg += top.c[p * 4 + 1]; mb += top.c[p * 4 + 2]; mn++; }
+    for (let p = 0; p < top.w * top.h; p++) if (!top.c[p * 4 + 3]) {
+      top.c[p * 4] = mn ? mr / mn : 128; top.c[p * 4 + 1] = mn ? mg / mn : 128; top.c[p * 4 + 2] = mn ? mb / mn : 128; top.c[p * 4 + 3] = 1;
+    }
+    for (let k = levels.length - 2; k >= 0; k--) {
+      const L = levels[k], P = levels[k + 1];
+      for (let y = 0; y < L.h; y++) for (let x = 0; x < L.w; x++) {
+        const q = (y * L.w + x) * 4;
+        if (L.c[q + 3] !== 0) continue;
+        const sx = (x + 0.5) / 2 - 0.5, sy = Math.min(P.h - 1, Math.max(0, (y + 0.5) / 2 - 0.5));
+        let x0 = Math.floor(sx), y0 = Math.floor(sy); const ax = sx - x0, ay = sy - y0;
+        const y1 = Math.min(P.h - 1, y0 + 1);
+        const xa = ((x0 % P.w) + P.w) % P.w, xb = ((x0 + 1) % P.w + P.w) % P.w;
+        for (let ch = 0; ch < 3; ch++) {
+          const v00 = P.c[(y0 * P.w + xa) * 4 + ch], v10 = P.c[(y0 * P.w + xb) * 4 + ch];
+          const v01 = P.c[(y1 * P.w + xa) * 4 + ch], v11 = P.c[(y1 * P.w + xb) * 4 + ch];
+          L.c[q + ch] = (v00 * (1 - ax) + v10 * ax) * (1 - ay) + (v01 * (1 - ax) + v11 * ax) * ay;
+        }
+        L.c[q + 3] = 2; // filled
+      }
+    }
+  }
+
+  function stitch(frames, opts, progress) {
+    if (!frames.length) throw new Error('No photos to stitch.');
+    let fov = opts.fovLong;
+    if (opts.autoFov && frames.length >= 4) { progress('Measuring your lens…', 0); fov = calibrateFov(frames, progress); }
+    const fovRad = fov * PI / 180;
+    const params = frames.map(f => frameParams(f, fovRad));
+    progress('Balancing brightness…', 0);
+    const gains = (opts.gain && frames.length > 1) ? estimateGains(frames, params) : frames.map(() => [1, 1, 1]);
+    const W = opts.width, H = W / 2, tabs = tables(W, H);
+    const acc = accumulate(frames, params, gains, W, H, tabs, (k, n) => progress('Blending photos…', k / n));
+    progress('Filling gaps…', 1);
+    for (let p = 0; p < W * H; p++) {
+      const q = p * 4, w = acc[q + 3];
+      if (w > 1e-9) { acc[q] /= w; acc[q + 1] /= w; acc[q + 2] /= w; acc[q + 3] = 1; } else acc[q + 3] = 0;
+    }
+    fillHoles(acc, W, H);
+    const out = new Uint8ClampedArray(W * H * 4);
+    for (let p = 0; p < W * H * 4; p += 4) { out[p] = acc[p]; out[p + 1] = acc[p + 1]; out[p + 2] = acc[p + 2]; out[p + 3] = 255; }
+    return { W, H, fov, data: out };
+  }
+
+  // exposed for testing
+  self.__core = { stitch, rasterize, tables, frameParams, estimateGains, calibrateFov };
+}
+
+let worker = null, session = null; // session = {id, hasFrames}
+function newWorker() {
+  if (worker) worker.terminate();
+  const src = '(' + workerMain.toString() + ')()';
+  worker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
+}
+
+function finishCapture() {
+  if (frames.length < 2) return;
+  const shots = frames.map(f => ({ w: f.w, h: f.h, data: f.data, R: f.R }));
+  stopStream();
+  frames = [];
+  newWorker();
+  worker.postMessage({ type: 'frames', frames: shots }, shots.map(s => s.data.buffer));
+  session = { id: Date.now(), hasFrames: true };
+  const calibrated = store('fovCalibrated') === '1';
+  runStitch({ fovLong: fovLong, autoFov: !calibrated, gain: true, width: parseInt(store('res') || '3072', 10) });
+}
+
+function runStitch(opts) {
+  show('stitch');
+  $('#stitchBar').style.width = '0%'; $('#stitchMsg').textContent = 'Preparing…';
+  worker.onmessage = async (ev) => {
+    const m = ev.data;
+    if (m.type === 'progress') {
+      $('#stitchMsg').textContent = m.stage;
+      $('#stitchBar').style.width = Math.round((m.p || 0) * 100) + '%';
+    } else if (m.type === 'error') {
+      toast('Stitching failed: ' + m.message, 5000); show('home');
+    } else if (m.type === 'done') {
+      if (opts.autoFov) { fovLong = m.fov; store('fovLong', String(m.fov)); store('fovCalibrated', '1'); }
+      try {
+        const item = await buildItem(session.id, m.W, m.H, m.data, m.fov);
+        try { await DB.put(item); } catch (e) { toast('Could not save to the in-app gallery (storage full?). Use Save / Share.', 4000); }
+        renderGallery();
+        openViewer(item, true);
+      } catch (e) { toast('Could not create the image: ' + (e.message || e), 5000); show('home'); }
+    }
+  };
+  worker.postMessage({ type: 'stitch', opts });
+}
+
+function canvasToBlob(c, type, q) { return new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error('encoding failed')), type, q)); }
+
+async function buildItem(id, W, H, data, fov) {
+  const c = document.createElement('canvas'); c.width = W; c.height = H;
+  c.getContext('2d').putImageData(new ImageData(data, W, H), 0, 0);
+  const jpg = await canvasToBlob(c, 'image/jpeg', 0.92);
+  const blob = await addPanoXmp(jpg, W, H);
+  const t = document.createElement('canvas'); t.width = 480; t.height = 240;
+  t.getContext('2d').drawImage(c, 0, 0, 480, 240);
+  const thumb = await canvasToBlob(t, 'image/jpeg', 0.8);
+  c.width = c.height = 1;
+  return { id, blob, thumb, W, H, fov };
+}
+
+// Adds Google "Photo Sphere" XMP so Facebook, Google Photos, VR apps etc. recognise it as 360°.
+async function addPanoXmp(blob, W, H) {
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  if (buf[0] !== 0xFF || buf[1] !== 0xD8) return blob;
+  const xmp = '<?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>' +
+    '<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">' +
+    '<rdf:Description rdf:about="" xmlns:GPano="http://ns.google.com/photos/1.0/panorama/">' +
+    '<GPano:ProjectionType>equirectangular</GPano:ProjectionType>' +
+    '<GPano:UsePanoramaViewer>True</GPano:UsePanoramaViewer>' +
+    `<GPano:CroppedAreaImageWidthPixels>${W}</GPano:CroppedAreaImageWidthPixels>` +
+    `<GPano:CroppedAreaImageHeightPixels>${H}</GPano:CroppedAreaImageHeightPixels>` +
+    `<GPano:FullPanoWidthPixels>${W}</GPano:FullPanoWidthPixels>` +
+    `<GPano:FullPanoHeightPixels>${H}</GPano:FullPanoHeightPixels>` +
+    '<GPano:CroppedAreaLeftPixels>0</GPano:CroppedAreaLeftPixels>' +
+    '<GPano:CroppedAreaTopPixels>0</GPano:CroppedAreaTopPixels>' +
+    '<GPano:PoseHeadingDegrees>0</GPano:PoseHeadingDegrees>' +
+    '</rdf:Description></rdf:RDF></x:xmpmeta><?xpacket end="w"?>';
+  const payload = new TextEncoder().encode('http://ns.adobe.com/xap/1.0/\0' + xmp);
+  const len = payload.length + 2;
+  const seg = new Uint8Array(4 + payload.length);
+  seg[0] = 0xFF; seg[1] = 0xE1; seg[2] = len >> 8; seg[3] = len & 255; seg.set(payload, 4);
+  let pos = 2;
+  if (buf[2] === 0xFF && buf[3] === 0xE0) pos = 4 + ((buf[4] << 8) | buf[5]);
+  return new Blob([buf.subarray(0, pos), seg, buf.subarray(pos)], { type: 'image/jpeg' });
+}
+
+/* =====================================================================
+   360° VIEWER (WebGL)
+   ===================================================================== */
+class PanoViewer {
+  constructor(canvas) {
+    this.c = canvas;
+    const gl = this.gl = canvas.getContext('webgl', { antialias: false, alpha: false });
+    if (!gl) throw new Error('WebGL is not available.');
+    const vs = 'attribute vec2 p; varying vec2 v; void main(){ v = p; gl_Position = vec4(p, 0.0, 1.0); }';
+    const fs = `precision highp float; varying vec2 v; uniform sampler2D tex; uniform vec3 F, Rt, U; uniform vec2 sc;
+      void main(){ vec3 d = normalize(F + v.x*sc.x*Rt + v.y*sc.y*U);
+        float lon = atan(d.x, d.y); float lat = asin(clamp(d.z, -1.0, 1.0));
+        gl_FragColor = texture2D(tex, vec2(lon/6.2831853 + 0.5, 0.5 - lat/3.1415927)); }`;
+    const sh = (t, s) => { const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o); if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o)); return o; };
+    const pr = this.pr = gl.createProgram();
+    gl.attachShader(pr, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(pr); gl.useProgram(pr);
+    const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+    const loc = gl.getAttribLocation(pr, 'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+    this.u = { F: gl.getUniformLocation(pr, 'F'), Rt: gl.getUniformLocation(pr, 'Rt'), U: gl.getUniformLocation(pr, 'U'), sc: gl.getUniformLocation(pr, 'sc') };
+    this.tex = gl.createTexture();
+    this.yaw = 0; this.pitch = 0; this.fov = 80; this.gyro = false; this.gyroOffset = 0; this.running = false;
+    this.pointers = new Map();
+    canvas.addEventListener('pointerdown', e => { canvas.setPointerCapture(e.pointerId); this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); this.pinch = null; });
+    canvas.addEventListener('pointermove', e => this.onMove(e));
+    const up = e => { this.pointers.delete(e.pointerId); this.pinch = null; };
+    canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
+    canvas.addEventListener('wheel', e => { e.preventDefault(); this.fov = Math.max(30, Math.min(110, this.fov * Math.exp(e.deltaY * 0.001))); }, { passive: false });
+    this.resize();
+  }
+  onMove(e) {
+    const p = this.pointers.get(e.pointerId); if (!p) return;
+    if (this.pointers.size === 1) {
+      const k = this.fov * D2R / this.c.clientHeight;
+      const dx = (e.clientX - p.x) * k, dy = (e.clientY - p.y) * k;
+      if (this.gyro) this.gyroOffset -= dx;
+      else { this.yaw -= dx; this.pitch = Math.max(-89.9 * D2R, Math.min(89.9 * D2R, this.pitch + dy)); }
+    }
+    p.x = e.clientX; p.y = e.clientY;
+    if (this.pointers.size === 2) {
+      const [a, b] = [...this.pointers.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y);
+      if (this.pinch) this.fov = Math.max(30, Math.min(110, this.fov * this.pinch / d));
+      this.pinch = d;
+    }
+  }
+  resize() {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    this.c.width = Math.max(1, Math.round(this.c.clientWidth * dpr)); this.c.height = Math.max(1, Math.round(this.c.clientHeight * dpr));
+  }
+  setImage(img) {
+    const gl = this.gl, max = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    let src = img;
+    if (img.width > max) { const c = document.createElement('canvas'); c.width = max; c.height = max / 2; c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); src = c; }
+    gl.bindTexture(gl.TEXTURE_2D, this.tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, src);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  }
+  setGyro(on) {
+    this.gyro = on;
+    if (on && ori) { const b = this.deviceBasis(); this.gyroOffset = this.yaw - Math.atan2(b.F[0], b.F[1]); }
+    if (!on && ori) { const b = this.basis(); this.yaw = Math.atan2(b.F[0], b.F[1]); this.pitch = Math.asin(Math.max(-1, Math.min(1, b.F[2]))); }
+  }
+  deviceBasis() {
+    const R = ori.R;
+    const col = (v) => [R[0] * v[0] + R[1] * v[1] + R[2] * v[2], R[3] * v[0] + R[4] * v[1] + R[5] * v[2], R[6] * v[0] + R[7] * v[1] + R[8] * v[2]];
+    const ang = (screen.orientation && typeof screen.orientation.angle === 'number') ? screen.orientation.angle : (window.orientation || 0);
+    const a = ((ang % 360) + 360) % 360;
+    // screen right / up expressed in device coordinates
+    const map = { 0: [[1, 0, 0], [0, 1, 0]], 90: [[0, -1, 0], [1, 0, 0]], 180: [[-1, 0, 0], [0, -1, 0]], 270: [[0, 1, 0], [-1, 0, 0]] };
+    const [r, u] = map[a] || map[0];
+    return { F: col([0, 0, -1]), Rt: col(r), U: col(u) };
+  }
+  basis() {
+    if (this.gyro && ori) {
+      const b = this.deviceBasis(), a = this.gyroOffset, c = Math.cos(a), s = Math.sin(a);
+      const rot = v => [v[0] * c + v[1] * s, -v[0] * s + v[1] * c, v[2]];
+      return { F: rot(b.F), Rt: rot(b.Rt), U: rot(b.U) };
+    }
+    const cy = Math.cos(this.yaw), sy = Math.sin(this.yaw), cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
+    return { F: [cp * sy, cp * cy, sp], Rt: [cy, -sy, 0], U: [-sp * sy, -sp * cy, cp] };
+  }
+  start() { if (this.running) return; this.running = true; const loop = () => { if (!this.running) return; this.draw(); requestAnimationFrame(loop); }; loop(); }
+  stop() { this.running = false; }
+  draw() {
+    const gl = this.gl;
+    if (this.c.width !== Math.round(this.c.clientWidth * Math.min(window.devicePixelRatio || 1, 2))) this.resize();
+    gl.viewport(0, 0, this.c.width, this.c.height);
+    const b = this.basis(), t = Math.tan(this.fov * D2R / 2), asp = this.c.width / this.c.height;
+    gl.uniform3fv(this.u.F, b.F); gl.uniform3fv(this.u.Rt, b.Rt); gl.uniform3fv(this.u.U, b.U);
+    gl.uniform2f(this.u.sc, t * asp, t);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+}
+
+let viewer = null, current = null, currentUrl = null;
+
+function loadImage(blob) {
+  return new Promise((res, rej) => { const u = URL.createObjectURL(blob); const im = new Image(); im.onload = () => res({ im, u }); im.onerror = () => rej(new Error('Could not open the image.')); im.src = u; });
+}
+
+async function openViewer(item, fresh) {
+  current = item;
+  show('viewer');
+  try { if (!viewer) viewer = new PanoViewer($('#glcanvas')); } catch (e) { toast(e.message, 4000); show('home'); return; }
+  viewer.resize();
+  if (currentUrl) URL.revokeObjectURL(currentUrl);
+  const { im, u } = await loadImage(item.blob); currentUrl = u;
+  viewer.setImage(im);
+  viewer.yaw = 0; viewer.pitch = 0; viewer.fov = 80;
+  viewer.start();
+  $('#viewerTitle').textContent = item.imported ? 'Imported 360°' : new Date(item.id).toLocaleDateString();
+  const canAdjust = !!(session && session.hasFrames && session.id === item.id);
+  $('#btnAdjust').style.display = canAdjust ? '' : 'none';
+  $('#btnDelete').style.display = item.imported ? 'none' : '';
+  if (fresh) toast('Saved in Orbit 360. Tap Save / Share to put it in Photos.', 3500);
+}
+
+$('#btnBack').onclick = () => { if (viewer) { viewer.stop(); viewer.setGyro(false); $('#btnGyro').classList.remove('on'); } show('home'); };
+$('#btnGyro').onclick = async () => {
+  if (!viewer) return;
+  if (!viewer.gyro) { try { await ensureMotion(); } catch (e) { toast(e.message, 4000); return; } }
+  viewer.setGyro(!viewer.gyro);
+  $('#btnGyro').classList.toggle('on', viewer.gyro);
+};
+$('#btnSave').onclick = async () => {
+  if (!current) return;
+  const name = 'orbit360-' + new Date(current.id).toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.jpg';
+  const file = new File([current.blob], name, { type: 'image/jpeg' });
+  try {
+    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: '360° photo' }); return; }
+  } catch (e) { if (e && e.name === 'AbortError') return; }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+};
+$('#btnFlat').onclick = () => { if (!currentUrl) return; $('#flatImg').src = currentUrl; $('#flatModal').classList.add('on'); };
+$('#btnFlatClose').onclick = () => $('#flatModal').classList.remove('on');
+$('#btnDelete').onclick = async () => {
+  if (!current) return;
+  if (!(await askConfirm('Delete this 360° photo?', 'Delete'))) return;
+  try { await DB.del(current.id); } catch (e) {}
+  if (session && session.id === current.id) { session = null; if (worker) { worker.terminate(); worker = null; } }
+  viewer.stop(); show('home'); renderGallery();
+};
+
+// Adjust
+const fovRange = $('#fovRange');
+function syncAdjust() { fovRange.value = fovLong; $('#fovVal').textContent = (+fovLong).toFixed(1) + '°'; $('#resSel').value = store('res') || '3072'; }
+fovRange.oninput = () => { $('#fovVal').textContent = (+fovRange.value).toFixed(1) + '°'; };
+$('#btnAdjust').onclick = () => { syncAdjust(); $('#adjustModal').classList.add('on'); };
+$('#btnAdjustClose').onclick = () => $('#adjustModal').classList.remove('on');
+function restitch(auto) {
+  if (!worker || !session) return;
+  $('#adjustModal').classList.remove('on'); viewer.stop();
+  const width = parseInt($('#resSel').value, 10); store('res', String(width));
+  if (!auto) { fovLong = parseFloat(fovRange.value); store('fovLong', String(fovLong)); store('fovCalibrated', '1'); }
+  runStitch({ fovLong, autoFov: auto, gain: $('#gainChk').checked, width });
+}
+$('#btnRestitch').onclick = () => restitch(false);
+$('#btnAuto').onclick = () => restitch(true);
+
+// Import an existing equirectangular image
+$('#importFile').onchange = async (e) => {
+  const f = e.target.files && e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  openViewer({ id: Date.now(), blob: f, imported: true }, false);
+};
+
+$('#btnNew').onclick = () => startCapture();
+document.addEventListener('visibilitychange', async () => {
+  if (document.hidden && capturing && frames.length === 0) { stopStream(); show('home'); return; }
+  // iOS stops the camera when you leave the app; restart it so the capture can continue
+  if (!document.hidden && capturing && stream && stream.getVideoTracks().every(t => t.readyState === 'ended')) {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } } });
+      video.srcObject = stream; await video.play();
+    } catch (e) { toast('Camera stopped. Tap Stitch to use the shots you have.', 4000); }
+  }
+});
+
+renderGallery();
+</script>
+</body>
+</html>
