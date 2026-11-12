@@ -186,7 +186,13 @@
       <button class="btn small lensbtn" data-lens="main">Main camera 1×</button>
       <button class="btn small lensbtn" data-lens="ultra" id="lensUltra">Ultra-wide 0.5×</button>
     </div>
-    <label class="chk" style="margin:6px 0"><input id="tripodChk" type="checkbox"> On a tripod (the front camera does the floor)</label>
+    <label class="field" style="margin:6px 0">On a tripod?
+      <select id="tripodSel">
+        <option value="">No, I hold the phone</option>
+        <option value="ceil">Yes – front camera does the ceiling</option>
+        <option value="floor">Yes – front camera does the floor</option>
+      </select>
+    </label>
     <p id="planText" style="font-size:13px;margin:0 0 12px"></p>
     <button id="btnStart" class="btn primary bigbtn">Start capturing</button>
   </div>
@@ -537,7 +543,9 @@ const isCal = (k) => store('fovCal_' + k) === '1' || (k === 'main' && store('fov
 function setFov(k, v, cal) { fovs[k] = v; store('fov_' + k, String(v)); if (cal) store('fovCal_' + k, '1'); }
 const FLIP = [-1, 0, 0, 0, 1, 0, 0, 0, -1];
 let camIds = {}, curCam = 'main', camBusy = false, camPrompted = null;
-let lens = store('lens') === 'ultra' ? 'ultra' : 'main', tripod = store('tripod') === '1';
+let lens = store('lens') === 'ultra' ? 'ultra' : 'main';
+// tripod: '' (hand-held) | 'floor' (front camera shoots the floor) | 'ceil' (front camera shoots the ceiling)
+let tripod = ({ '1': 'floor', floor: 'floor', ceil: 'ceil' })[store('tripod')] || '';
 
 function makeTargets(lensKey, onTripod) {
   const fov = fovs[lensKey] || 70, tl = Math.tan(fov * D2R / 2);
@@ -550,7 +558,8 @@ function makeTargets(lensKey, onTripod) {
   for (let i = 0; i < n45; i++) t.push({ yaw: (i + 0.5) * 360 / n45, pitch: 45 });
   for (let i = 0; i < n45; i++) t.push({ yaw: i * 360 / n45, pitch: -45 });
   if (poles) { t.push({ yaw: 0, pitch: 90 }); t.push({ yaw: 0, pitch: -90 }); }
-  return t.map(o => ({ ...o, dir: dirFrom(o.yaw * D2R, o.pitch * D2R), done: false, cam: onTripod && o.pitch < 0 ? 'front' : 'back' }));
+  const front = (o) => (onTripod === 'floor' && o.pitch < 0) || (onTripod === 'ceil' && o.pitch > 0);
+  return t.map(o => ({ ...o, dir: dirFrom(o.yaw * D2R, o.pitch * D2R), done: false, cam: front(o) ? 'front' : 'back' }));
 }
 const eligible = (t) => !t.done && (!tripod || (t.cam === 'front') === (curCam === 'front'));
 /* Floor patch: after the tripod shots, the tripod is removed and 1–2 photos of the floor are taken by hand,
@@ -619,11 +628,12 @@ function updateCamUI() {
   $('#btnCam').textContent = curCam === 'front' ? '⟲ Back camera' : '⟲ Front camera';
   document.querySelectorAll('.lensbtn').forEach(b => b.classList.toggle('on', b.dataset.lens === lens));
   $('#lensUltra').style.display = camIds.ultra ? '' : 'none';
-  $('#tripodChk').checked = tripod;
+  $('#tripodSel').value = tripod;
   const t = makeTargets(lens, tripod), nf = t.filter(x => x.cam === 'front').length, poles = t.some(x => x.pitch === 90);
   $('#planText').textContent = `${t.length} shots.` +
-    (poles ? (tripod ? ' Tilt the phone up to 45° and straight up; the front camera then photographs the floor.' : ' Includes straight up and straight down.')
-           : (tripod ? ` Tilt up to 45° only: ${nf} floor shots are taken with the front camera.` : ' No need to point straight up or down.'));
+    (tripod === 'ceil' ? (poles ? ' Tilt the phone down to 45° and straight down; the front camera then photographs the ceiling.' : ` Tilt down to 45° only: ${nf} ceiling shots are taken with the front camera.`)
+     : tripod === 'floor' ? (poles ? ' Tilt the phone up to 45° and straight up; the front camera then photographs the floor.' : ` Tilt up to 45° only: ${nf} floor shots are taken with the front camera.`)
+     : (poles ? ' Includes straight up and straight down.' : ' No need to point straight up or down.'));
 }
 
 async function startCapture() {
@@ -766,9 +776,11 @@ function promptSwitch() {
   const toFront = curCam !== 'front';
   if (camPrompted === curCam || camBusy) return;
   camPrompted = curCam;
-  $('#camTitle').textContent = toFront ? 'Now the floor' : 'Back to the main camera';
+  const ceil = tripod === 'ceil';
+  $('#camTitle').textContent = toFront ? (ceil ? 'Now the ceiling' : 'Now the floor') : 'Back to the main camera';
   $('#camText').textContent = toFront
-    ? 'Switch to the front camera. Then tilt the phone UP to each dot: the front camera, on the screen side, photographs the floor.'
+    ? (ceil ? 'Switch to the front camera. Then tilt the phone DOWN to each dot: the front camera, on the screen side, photographs the ceiling.'
+            : 'Switch to the front camera. Then tilt the phone UP to each dot: the front camera, on the screen side, photographs the floor.')
     : 'A few shots are still missing for the back camera.';
   $('#btnCamSwitch').textContent = toFront ? '⟲ Switch to the front camera' : '⟲ Switch to the back camera';
   $('#camSheet').style.display = 'block';
@@ -780,7 +792,7 @@ document.querySelectorAll('.lensbtn').forEach(b => b.onclick = async () => {
   lens = b.dataset.lens; store('lens', lens); updateCamUI();
   if (curCam !== 'front') await switchCam(lens);
 });
-$('#tripodChk').onchange = (e) => { tripod = e.target.checked; store('tripod', tripod ? '1' : '0'); updateCamUI(); };
+$('#tripodSel').onchange = (e) => { tripod = e.target.value; store('tripod', tripod || '0'); updateCamUI(); };
 
 function hintFor(t, f, aligned, still) {
   if (aligned && !still) return 'Hold still…';
@@ -789,7 +801,7 @@ function hintFor(t, f, aligned, still) {
     if (t.pitch === -90) return 'Point the phone straight UP: the front camera sees the floor';
     if (t.pitch === 90) return 'Point the phone straight DOWN: the front camera sees the ceiling';
     const dpb = -(t.pitch - pitchOf(f) * R2D);                  // how the back of the phone must tilt
-    if (Math.abs(dpb) > 20) return dpb > 0 ? 'Tilt the phone up: the front camera looks at the floor' : 'Tilt the phone down';
+    if (Math.abs(dpb) > 20) return dpb > 0 ? 'Tilt the phone up: the front camera looks at the floor' : 'Tilt the phone down: the front camera looks at the ceiling';
     return 'Turn until the white dot is in the ring, then hold still';
   }
   if (t.pitch === 90) return 'Point straight up at the sky / ceiling';
