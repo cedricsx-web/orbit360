@@ -12,6 +12,7 @@
 <link rel="icon" href="icon-192.png">
 <link rel="manifest" href="manifest.json">
 <title>Orbit 360</title>
+<!-- ORBIT_APP_SOURCE -->
 <style>
   :root {
     --bg: #0b0d12; --panel: #161a22; --line: #262c38; --text: #eef1f6; --muted: #8b94a5;
@@ -92,7 +93,37 @@
   .toast.on { opacity: 1; }
   .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; align-items: flex-end; z-index: 40; }
   .modal.on { display: flex; }
-  .modal .sheet { position: relative; left: auto; right: auto; bottom: auto; margin: 12px; margin-bottom: calc(var(--sb) + 12px); width: 100%; }
+  .modal .sheet { position: relative; left: auto; right: auto; bottom: auto; margin: 12px; margin-bottom: calc(var(--sb) + 12px); width: 100%; max-height: calc(100% - var(--st) - var(--sb) - 40px); overflow-y: auto; -webkit-overflow-scrolling: touch; }
+
+  /* Tours */
+  #hot { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  #crosshair { position: absolute; left: 50%; top: 50%; width: 44px; height: 44px; margin: -22px 0 0 -22px; pointer-events: none; display: none; }
+  #crosshair::before, #crosshair::after { content: ""; position: absolute; background: #ffb547; box-shadow: 0 0 3px rgba(0,0,0,.8); }
+  #crosshair::before { left: 21px; top: 0; width: 2px; height: 44px; }
+  #crosshair::after { top: 21px; left: 0; height: 2px; width: 44px; }
+  .tbar { position: absolute; left: 0; right: 0; bottom: 0; padding: 8px 10px calc(var(--sb) + 12px); z-index: 3; display: none; }
+  .tbar .btns { display: flex; gap: 6px; justify-content: center; flex-wrap: wrap; }
+  #strip { display: flex; gap: 8px; overflow-x: auto; padding: 4px 2px 10px; -webkit-overflow-scrolling: touch; }
+  #strip button { flex: 0 0 auto; width: 92px; border-radius: 10px; overflow: hidden; border: 2px solid transparent; background: rgba(0,0,0,.55); padding: 0; font-size: 11px; }
+  #strip button.cur { border-color: var(--accent); }
+  #strip img { width: 100%; height: 46px; object-fit: cover; display: block; }
+  #strip span { display: block; padding: 2px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #placeHint { text-align: center; margin-bottom: 8px; }
+  #placeHint span { display: inline-block; background: rgba(0,0,0,.65); padding: 8px 12px; border-radius: 12px; font-size: 14px; }
+  .pick { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 10px 0 14px; }
+  .pick button { position: relative; padding: 0; border-radius: 12px; overflow: hidden; border: 3px solid transparent; aspect-ratio: 2/1; background: var(--panel); }
+  .pick button img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .pick button.sel { border-color: var(--accent); }
+  .pick button.sel::after { content: "✓"; position: absolute; top: 4px; right: 6px; background: var(--accent); color: var(--accent-ink); width: 22px; height: 22px; border-radius: 50%; font-weight: 800; line-height: 22px; font-size: 13px; }
+  .pick button .num { position: absolute; left: 6px; bottom: 4px; font-size: 11px; background: rgba(0,0,0,.6); padding: 1px 6px; border-radius: 6px; }
+  input.txt { width: 100%; padding: 10px 12px; border-radius: 10px; background: var(--panel); color: var(--text); border: 1px solid var(--line); font: inherit; margin-top: 4px; -webkit-user-select: text; user-select: text; }
+  .tourcard { position: relative; border-radius: 14px; overflow: hidden; background: var(--panel); border: 1px solid var(--line); aspect-ratio: 2 / 1; padding: 0; }
+  .tourcard img { width: 100%; height: 100%; object-fit: cover; display: block; filter: brightness(.75); }
+  .tourcard b { position: absolute; left: 10px; bottom: 8px; font-size: 15px; text-shadow: 0 1px 4px #000; }
+  .tourcard i { position: absolute; right: 8px; top: 6px; font-style: normal; font-size: 11px; background: rgba(0,0,0,.6); padding: 2px 6px; border-radius: 6px; }
+  #playerIntro { position: absolute; inset: 0; z-index: 20; display: none; align-items: center; justify-content: center; flex-direction: column; text-align: center; padding: 30px; background: rgba(5,7,10,.72); }
+  #playerIntro h2 { font-size: 26px; margin: 0 0 8px; }
+  #playerIntro p { color: #c9d0dc; margin: 0 0 20px; max-width: 340px; }
 </style>
 </head>
 <body>
@@ -122,6 +153,11 @@
   <h2>Your spheres</h2>
   <div id="gallery" class="grid"></div>
   <p id="galleryEmpty" class="empty">No photos yet. Your 360° photos are kept on this phone.</p>
+
+  <h2>Your tours</h2>
+  <p class="empty" style="margin-top:-4px">Link spheres together so visitors can walk from one to the next.</p>
+  <div id="tours" class="grid"></div>
+  <button id="btnNewTour" class="btn" style="width:100%;margin-top:10px">＋ New tour</button>
 </section>
 
 <!-- ================= CAPTURE ================= -->
@@ -158,12 +194,42 @@
 <!-- ================= VIEWER ================= -->
 <section id="viewer" class="screen">
   <canvas id="glcanvas"></canvas>
+  <canvas id="hot"></canvas>
+  <div id="crosshair"></div>
   <div class="topbar">
     <button id="btnBack" class="btn ghost small">‹ Back</button>
     <div id="viewerTitle" class="pill">360°</div>
     <button id="btnGyro" class="btn ghost small toggle">Gyro</button>
   </div>
-  <div class="bottombar">
+  <!-- tour editor -->
+  <div id="tourBar" class="tbar">
+    <div id="strip"></div>
+    <div class="btns">
+      <button id="btnAddLink" class="btn primary small">＋ Link</button>
+      <button id="btnSphere" class="btn ghost small">Sphere ⋯</button>
+      <button id="btnTourSet" class="btn ghost small">Tour ⚙</button>
+      <button id="btnPreview" class="btn ghost small">▶ Preview</button>
+    </div>
+  </div>
+  <!-- tour preview -->
+  <div id="playBar" class="tbar">
+    <div class="btns"><button id="btnEditTour" class="btn ghost small">✎ Back to editing</button></div>
+  </div>
+  <!-- placing a link -->
+  <div id="placeBar" class="tbar">
+    <div id="placeHint"><span id="placeText"></span></div>
+    <div class="btns">
+      <button id="btnPlaceCancel" class="btn ghost">Cancel</button>
+      <button id="btnPlace" class="btn primary">Place link here</button>
+    </div>
+  </div>
+  <div id="playerIntro">
+    <h2 id="introTitle"></h2>
+    <p>Drag to look around. Tap the circles on the floor to walk to the next spot.</p>
+    <button id="btnIntroGo" class="btn primary bigbtn" style="max-width:320px">Start the tour</button>
+    <button id="btnIntroGyro" class="btn" style="max-width:320px;width:100%;margin-top:10px">Start with motion (move your phone)</button>
+  </div>
+  <div id="viewerBar" class="bottombar">
     <button id="btnSave" class="btn primary small">Save / Share</button>
     <button id="btnFlat" class="btn ghost small">Flat view</button>
     <button id="btnAdjust" class="btn ghost small">Adjust</button>
@@ -201,6 +267,95 @@
     <img id="flatImg" style="width:100%;border-radius:12px;display:block" alt="Flat 360 panorama">
     <p style="margin:10px 4px 6px;font-size:13px">This is the flat (equirectangular) version. It's what Facebook, Google Photos and VR viewers read as a 360° photo.</p>
     <button id="btnFlatClose" class="btn" style="width:100%">Close</button>
+  </div>
+</div>
+
+<!-- Pick spheres (new tour / add spheres) -->
+<div id="pickModal" class="modal">
+  <div class="sheet">
+    <h3 id="pickTitle">New tour</h3>
+    <label class="field" id="pickNameWrap">Tour name
+      <input id="pickName" class="txt" type="text" placeholder="e.g. UN Visitors Lobby" maxlength="60">
+    </label>
+    <p id="pickHelp" style="margin:6px 0 0">Tap the spheres to include, in the order you walked. The first one is where visitors start.</p>
+    <div id="pickGrid" class="pick"></div>
+    <div class="row">
+      <button id="btnPickCancel" class="btn">Cancel</button>
+      <button id="btnPickOk" class="btn primary">Create tour</button>
+    </div>
+  </div>
+</div>
+
+<!-- Choose link target -->
+<div id="targetModal" class="modal">
+  <div class="sheet">
+    <h3>Link to which sphere?</h3>
+    <p>Pick the sphere you shot next to this one.</p>
+    <div id="targetGrid" class="pick"></div>
+    <button id="btnTargetCancel" class="btn" style="width:100%">Cancel</button>
+  </div>
+</div>
+
+<!-- Current sphere settings -->
+<div id="sphereModal" class="modal">
+  <div class="sheet">
+    <h3>This sphere</h3>
+    <label class="field">Name (shown on the floor circles)
+      <input id="sphName" class="txt" type="text" maxlength="40">
+    </label>
+    <label class="field">Turn this sphere to line it up: <b id="sphRotVal">0°</b>
+      <input id="sphRot" type="range" min="-180" max="180" step="1" value="0">
+    </label>
+    <p style="font-size:13px">You rarely need this. Placing a link in both directions lines spheres up automatically.</p>
+    <div class="row">
+      <button id="btnSetStart" class="btn">Make this the start view</button>
+    </div>
+    <div class="row">
+      <button id="btnRemoveSphere" class="btn">Remove from tour</button>
+      <button id="btnSphereClose" class="btn primary">Done</button>
+    </div>
+  </div>
+</div>
+
+<!-- Tour settings -->
+<div id="tourModal" class="modal">
+  <div class="sheet">
+    <h3>Tour settings</h3>
+    <label class="field">Tour name
+      <input id="tName" class="txt" type="text" maxlength="60">
+    </label>
+    <label class="field">Kind of space (shapes the walking effect)
+      <select id="tSpace">
+        <option value="small">Small room / corridor</option>
+        <option value="room">Room</option>
+        <option value="hall">Large hall / lobby</option>
+        <option value="outdoors">Outdoors</option>
+      </select>
+    </label>
+    <label class="field">Camera height when you shot: <b id="tHeightVal">1.6 m</b>
+      <input id="tHeight" type="range" min="0.8" max="2.2" step="0.05" value="1.6">
+    </label>
+    <label class="field">Walking speed
+      <select id="tSpeed">
+        <option value="1.4">Slow</option>
+        <option value="1" selected>Normal</option>
+        <option value="0.7">Fast</option>
+      </select>
+    </label>
+    <div class="row"><button id="btnShareTour" class="btn primary">Share tour (web page)</button></div>
+    <div class="row">
+      <button id="btnAddSpheres" class="btn">＋ Add spheres</button>
+      <button id="btnDeleteTour" class="btn">Delete tour</button>
+    </div>
+    <div class="row"><button id="btnTourClose" class="btn">Done</button></div>
+  </div>
+</div>
+
+<!-- Generic action sheet -->
+<div id="actModal" class="modal">
+  <div class="sheet">
+    <h3 id="actTitle"></h3>
+    <div id="actBtns"></div>
   </div>
 </div>
 
@@ -253,8 +408,10 @@ function wrapDeg(d) { d = ((d + 180) % 360 + 360) % 360 - 180; return d; }
 
 /* ---------------- motion sensors ---------------- */
 let ori = null;                       // latest {R, t}
+let compass = null;                   // iPhone compass heading (deg, clockwise from north) if available
 window.addEventListener('deviceorientation', (e) => {
   if (e.alpha == null || e.beta == null || e.gamma == null) return;
+  if (typeof e.webkitCompassHeading === 'number' && e.webkitCompassHeading >= 0) compass = e.webkitCompassHeading;
   ori = { R: rotFromEuler(e.alpha, e.beta, e.gamma), t: performance.now() };
 }, true);
 
@@ -280,22 +437,30 @@ const DB = {
     if (this.db) return Promise.resolve(this.db);
     return new Promise((res, rej) => {
       let req;
-      try { req = indexedDB.open('orbit360', 1); } catch (e) { return rej(e); }
-      req.onupgradeneeded = () => req.result.createObjectStore('panos', { keyPath: 'id' });
+      try { req = indexedDB.open('orbit360', 2); } catch (e) { return rej(e); }
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains('panos')) db.createObjectStore('panos', { keyPath: 'id' });
+        if (!db.objectStoreNames.contains('tours')) db.createObjectStore('tours', { keyPath: 'id' });
+      };
       req.onsuccess = () => { this.db = req.result; res(this.db); };
       req.onerror = () => rej(req.error);
     });
   },
-  async tx(mode, fn) {
+  async tx(mode, fn, store = 'panos') {
     const db = await this.open();
     return new Promise((res, rej) => {
-      const t = db.transaction('panos', mode); const st = t.objectStore('panos');
+      const t = db.transaction(store, mode); const st = t.objectStore(store);
       const r = fn(st); t.oncomplete = () => res(r && r.result); t.onerror = () => rej(t.error);
     });
   },
   put(item) { return this.tx('readwrite', st => st.put(item)); },
   del(id) { return this.tx('readwrite', st => st.delete(id)); },
-  all() { return this.tx('readonly', st => st.getAll()); }
+  all() { return this.tx('readonly', st => st.getAll()); },
+  get(id) { return this.tx('readonly', st => st.get(id)); },
+  putTour(t) { return this.tx('readwrite', st => st.put(t), 'tours'); },
+  delTour(id) { return this.tx('readwrite', st => st.delete(id), 'tours'); },
+  allTours() { return this.tx('readonly', st => st.getAll(), 'tours'); }
 };
 
 let thumbUrls = [];
@@ -315,7 +480,24 @@ async function renderGallery() {
     d.onclick = () => openViewer(it, false);
     g.appendChild(d);
   }
+  galleryItems = items;
+  // tours
+  const tg = $('#tours'); tg.innerHTML = '';
+  let tours = [];
+  try { tours = await DB.allTours() || []; } catch (e) { tours = []; }
+  tours.sort((a, b) => b.id - a.id);
+  for (const t of tours) {
+    const first = items.find(i => t.nodes.length && i.id === (t.start && t.start.pano || t.nodes[0].pano));
+    const d = document.createElement('button'); d.className = 'tourcard';
+    let u = '';
+    if (first) { u = URL.createObjectURL(first.thumb || first.blob); thumbUrls.push(u); }
+    d.innerHTML = (u ? `<img alt="" src="${u}">` : '') + `<b></b><i>${t.nodes.length} spheres</i>`;
+    d.querySelector('b').textContent = t.name || 'Untitled tour';
+    d.onclick = () => openTour(t, 'edit');
+    tg.appendChild(d);
+  }
 }
+let galleryItems = [];
 
 /* =====================================================================
    CAPTURE
@@ -323,7 +505,7 @@ async function renderGallery() {
 const video = $('#video'), overlay = $('#overlay'), octx = overlay.getContext('2d');
 const mm = $('#minimap'), mctx = mm.getContext('2d');
 const grab = document.createElement('canvas'), gctx = grab.getContext('2d', { willReadFrequently: true });
-let stream = null, targets = [], frames = [], yaw0 = null, capturing = false, rafId = 0;
+let stream = null, targets = [], frames = [], yaw0 = null, capturing = false, rafId = 0, captureHeading = null;
 let holdStart = 0, lastF = null, lastT = 0, speed = 0;
 let fovLong = parseFloat(store('fovLong')) || 70;
 
@@ -534,6 +716,7 @@ $('#btnStart').onclick = () => {
   const f = forwardOf(ori.R);
   if (Math.abs(pitchOf(f) * R2D) > 25) { toast('Point the phone at the horizon (hold it upright), then tap Start.'); return; }
   yaw0 = yawOf(f);
+  captureHeading = compass;
   $('#startSheet').style.display = 'none';
   $('#hint').style.display = 'block';
 };
@@ -795,7 +978,7 @@ function finishCapture() {
   frames = [];
   newWorker();
   worker.postMessage({ type: 'frames', frames: shots }, shots.map(s => s.data.buffer));
-  session = { id: Date.now(), hasFrames: true };
+  session = { id: Date.now(), hasFrames: true, heading: captureHeading };
   const calibrated = store('fovCalibrated') === '1';
   runStitch({ fovLong: fovLong, autoFov: !calibrated, gain: true, width: parseInt(store('res') || '3072', 10) });
 }
@@ -813,7 +996,7 @@ function runStitch(opts) {
     } else if (m.type === 'done') {
       if (opts.autoFov) { fovLong = m.fov; store('fovLong', String(m.fov)); store('fovCalibrated', '1'); }
       try {
-        const item = await buildItem(session.id, m.W, m.H, m.data, m.fov);
+        const item = await buildItem(session.id, m.W, m.H, m.data, m.fov, session.heading);
         try { await DB.put(item); } catch (e) { toast('Could not save to the in-app gallery (storage full?). Use Save / Share.', 4000); }
         renderGallery();
         openViewer(item, true);
@@ -825,7 +1008,7 @@ function runStitch(opts) {
 
 function canvasToBlob(c, type, q) { return new Promise((res, rej) => c.toBlob(b => b ? res(b) : rej(new Error('encoding failed')), type, q)); }
 
-async function buildItem(id, W, H, data, fov) {
+async function buildItem(id, W, H, data, fov, heading) {
   const c = document.createElement('canvas'); c.width = W; c.height = H;
   c.getContext('2d').putImageData(new ImageData(data, W, H), 0, 0);
   const jpg = await canvasToBlob(c, 'image/jpeg', 0.92);
@@ -834,7 +1017,7 @@ async function buildItem(id, W, H, data, fov) {
   t.getContext('2d').drawImage(c, 0, 0, 480, 240);
   const thumb = await canvasToBlob(t, 'image/jpeg', 0.8);
   c.width = c.height = 1;
-  return { id, blob, thumb, W, H, fov };
+  return { id, blob, thumb, W, H, fov, heading: (typeof heading === 'number') ? heading : null };
 }
 
 // Adds Google "Photo Sphere" XMP so Facebook, Google Photos, VR apps etc. recognise it as 360°.
@@ -865,37 +1048,88 @@ async function addPanoXmp(blob, W, H) {
 
 /* =====================================================================
    360° VIEWER (WebGL)
+   Shows one sphere, or walks from sphere A to sphere B: both photos are
+   projected onto a simple stand-in for the room (floor, walls, ceiling),
+   the camera glides from A's spot to B's spot, and B fades in on the way.
    ===================================================================== */
+const SPACES = {
+  small:    { wall: 2.5, ceil: 1.1 },
+  room:     { wall: 4,   ceil: 1.4 },
+  hall:     { wall: 9,   ceil: 4 },
+  outdoors: { wall: 30,  ceil: 1e4 }
+};
+const easeInOut = (t) => t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+const smoothstep = (a, b, t) => { const x = Math.max(0, Math.min(1, (t - a) / (b - a))); return x * x * (3 - 2 * x); };
+const clamp1 = (x) => Math.max(-1, Math.min(1, x));
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+
 class PanoViewer {
-  constructor(canvas) {
-    this.c = canvas;
+  constructor(canvas, hot) {
+    this.c = canvas; this.hot = hot; this.hctx = hot.getContext('2d');
     const gl = this.gl = canvas.getContext('webgl', { antialias: false, alpha: false });
     if (!gl) throw new Error('WebGL is not available.');
     const vs = 'attribute vec2 p; varying vec2 v; void main(){ v = p; gl_Position = vec4(p, 0.0, 1.0); }';
-    const fs = `precision highp float; varying vec2 v; uniform sampler2D tex; uniform vec3 F, Rt, U; uniform vec2 sc;
-      void main(){ vec3 d = normalize(F + v.x*sc.x*Rt + v.y*sc.y*U);
-        float lon = atan(d.x, d.y); float lat = asin(clamp(d.z, -1.0, 1.0));
-        gl_FragColor = texture2D(tex, vec2(lon/6.2831853 + 0.5, 0.5 - lat/3.1415927)); }`;
+    const fs = `precision highp float;
+      varying vec2 v;
+      uniform sampler2D texA; uniform sampler2D texB;
+      uniform vec3 F; uniform vec3 Rt; uniform vec3 U; uniform vec2 sc;
+      uniform vec3 P; uniform vec3 cB; uniform vec3 pc;
+      uniform float hA; uniform float hB; uniform float mixT; uniform float moving;
+      uniform float pr; uniform float floorZ; uniform float ceilZ;
+      const float PI = 3.14159265; const float TAU = 6.2831853;
+      vec4 pano(sampler2D t, vec3 dir, float h) {
+        float lon = mod(atan(dir.x, dir.y) - h + PI, TAU) - PI;
+        float lat = atan(dir.z, length(dir.xy));
+        return texture2D(t, vec2(lon / TAU + 0.5, 0.5 - lat / PI));
+      }
+      void main() {
+        vec3 d = normalize(F + v.x * sc.x * Rt + v.y * sc.y * U);
+        if (moving < 0.5) { gl_FragColor = pano(texA, d, hA); return; }
+        vec3 oc = P - pc;
+        float b = dot(oc, d), c = dot(oc, oc) - pr * pr;
+        float t = -b + sqrt(max(b * b - c, 0.0));
+        if (d.z < -0.0001) t = min(t, (floorZ - P.z) / d.z);
+        if (d.z >  0.0001) t = min(t, (ceilZ - P.z) / d.z);
+        vec3 X = P + t * d;
+        gl_FragColor = mix(pano(texA, X, hA), pano(texB, X - cB, hB), mixT);
+      }`;
     const sh = (t, s) => { const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o); if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o)); return o; };
-    const pr = this.pr = gl.createProgram();
-    gl.attachShader(pr, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(pr); gl.useProgram(pr);
+    const pr = gl.createProgram();
+    gl.attachShader(pr, sh(gl.VERTEX_SHADER, vs)); gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, fs)); gl.linkProgram(pr);
+    if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pr));
+    gl.useProgram(pr);
     const b = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, b);
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
     const loc = gl.getAttribLocation(pr, 'p'); gl.enableVertexAttribArray(loc); gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
-    this.u = { F: gl.getUniformLocation(pr, 'F'), Rt: gl.getUniformLocation(pr, 'Rt'), U: gl.getUniformLocation(pr, 'U'), sc: gl.getUniformLocation(pr, 'sc') };
-    this.tex = gl.createTexture();
+    this.u = {};
+    ['texA', 'texB', 'F', 'Rt', 'U', 'sc', 'P', 'cB', 'pc', 'hA', 'hB', 'mixT', 'moving', 'pr', 'floorZ', 'ceilZ'].forEach(n => this.u[n] = gl.getUniformLocation(pr, n));
+    gl.uniform1i(this.u.texA, 0); gl.uniform1i(this.u.texB, 1);
+    this.cache = new Map(); this.pending = new Map();
+    this.A = null; this.B = null; this.move = null;
     this.yaw = 0; this.pitch = 0; this.fov = 80; this.gyro = false; this.gyroOffset = 0; this.running = false;
+    this.links = []; this.onHotspot = null; this.editing = false;
     this.pointers = new Map();
-    canvas.addEventListener('pointerdown', e => { canvas.setPointerCapture(e.pointerId); this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); this.pinch = null; });
+    canvas.addEventListener('pointerdown', e => {
+      canvas.setPointerCapture(e.pointerId); this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY }); this.pinch = null;
+      this.down = { x: e.clientX, y: e.clientY, t: performance.now(), multi: this.pointers.size > 1 };
+      if (this.pointers.size > 1 && this.down) this.down.multi = true;
+    });
     canvas.addEventListener('pointermove', e => this.onMove(e));
-    const up = e => { this.pointers.delete(e.pointerId); this.pinch = null; };
+    const up = e => {
+      const d = this.down;
+      if (d && !d.multi && this.pointers.size === 1 && e.type === 'pointerup' &&
+          Math.hypot(e.clientX - d.x, e.clientY - d.y) < 10 && performance.now() - d.t < 450) this.tap(e);
+      if (this.pointers.size > 1 && this.down) this.down.multi = true;
+      this.pointers.delete(e.pointerId); this.pinch = null;
+      if (!this.pointers.size) this.down = null;
+    };
     canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
     canvas.addEventListener('wheel', e => { e.preventDefault(); this.fov = Math.max(30, Math.min(110, this.fov * Math.exp(e.deltaY * 0.001))); }, { passive: false });
     this.resize();
   }
   onMove(e) {
     const p = this.pointers.get(e.pointerId); if (!p) return;
-    if (this.pointers.size === 1) {
+    if (this.pointers.size === 1 && !this.move) {
       const k = this.fov * D2R / this.c.clientHeight;
       const dx = (e.clientX - p.x) * k, dy = (e.clientY - p.y) * k;
       if (this.gyro) this.gyroOffset -= dx;
@@ -909,32 +1143,84 @@ class PanoViewer {
       this.pinch = d;
     }
   }
+  tap(e) {
+    if (this.move || !this.onHotspot) return;
+    const r = this.c.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    let best = null, bestD = Infinity;
+    for (const l of this.links) {
+      if (!l._s) continue;
+      const d = Math.hypot(x - l._s[0], y - l._s[1]);
+      if (d < Math.max(34, l._r * 1.15) && d < bestD) { bestD = d; best = l; }
+    }
+    if (best) this.onHotspot(best.data);
+  }
   resize() {
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     this.c.width = Math.max(1, Math.round(this.c.clientWidth * dpr)); this.c.height = Math.max(1, Math.round(this.c.clientHeight * dpr));
+    this.hot.width = this.c.width; this.hot.height = this.c.height;
   }
-  setImage(img) {
-    const gl = this.gl, max = gl.getParameter(gl.MAX_TEXTURE_SIZE);
-    let src = img;
-    if (img.width > max) { const c = document.createElement('canvas'); c.width = max; c.height = max / 2; c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); src = c; }
-    gl.bindTexture(gl.TEXTURE_2D, this.tex);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, src);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  // Load (and keep a few) sphere images on the GPU. src: Blob or URL string.
+  texFor(key, src) {
+    const hit = this.cache.get(key);
+    if (hit) { hit.used = performance.now(); return Promise.resolve(hit); }
+    if (this.pending.has(key)) return this.pending.get(key);
+    const pr = new Promise((res, rej) => {
+      const url = typeof src === 'string' ? src : URL.createObjectURL(src);
+      const im = new Image();
+      im.onload = () => {
+        if (typeof src !== 'string') URL.revokeObjectURL(url);
+        const gl = this.gl, max = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+        let s = im;
+        if (im.width > max) { const c = document.createElement('canvas'); c.width = max; c.height = max / 2; c.getContext('2d').drawImage(im, 0, 0, c.width, c.height); s = c; }
+        const tex = gl.createTexture();
+        gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, s);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        const entry = { tex, key, used: performance.now() };
+        this.cache.set(key, entry); this.pending.delete(key);
+        this.evict(); res(entry);
+      };
+      im.onerror = () => { this.pending.delete(key); if (typeof src !== 'string') URL.revokeObjectURL(url); rej(new Error('Could not open the image.')); };
+      im.src = url;
+    });
+    this.pending.set(key, pr);
+    return pr;
+  }
+  evict() {
+    while (this.cache.size > 5) {
+      let lru = null;
+      for (const e of this.cache.values()) {
+        if ((this.A && this.A.key === e.key) || (this.B && this.B.key === e.key)) continue;
+        if (!lru || e.used < lru.used) lru = e;
+      }
+      if (!lru) break;
+      this.gl.deleteTexture(lru.tex); this.cache.delete(lru.key);
+    }
+  }
+  async show(key, src, headingDeg) {
+    const e = await this.texFor(key, src);
+    this.A = { tex: e.tex, key, h: (headingDeg || 0) * D2R }; this.B = null; this.move = null;
+  }
+  async moveTo(key, src, headingDeg, cB, o) {
+    const e = await this.texFor(key, src);
+    return new Promise(res => {
+      this.B = { tex: e.tex, key, h: headingDeg * D2R };
+      this.move = { c: cB, start: performance.now(), dur: o.dur, pr: o.pr, floorZ: o.floorZ, ceilZ: o.ceilZ, done: res };
+    });
   }
   setGyro(on) {
     this.gyro = on;
     if (on && ori) { const b = this.deviceBasis(); this.gyroOffset = this.yaw - Math.atan2(b.F[0], b.F[1]); }
-    if (!on && ori) { const b = this.basis(); this.yaw = Math.atan2(b.F[0], b.F[1]); this.pitch = Math.asin(Math.max(-1, Math.min(1, b.F[2]))); }
+    if (!on && ori) { const b = this.basis(); this.yaw = Math.atan2(b.F[0], b.F[1]); this.pitch = Math.asin(clamp1(b.F[2])); }
   }
   deviceBasis() {
     const R = ori.R;
     const col = (v) => [R[0] * v[0] + R[1] * v[1] + R[2] * v[2], R[3] * v[0] + R[4] * v[1] + R[5] * v[2], R[6] * v[0] + R[7] * v[1] + R[8] * v[2]];
     const ang = (screen.orientation && typeof screen.orientation.angle === 'number') ? screen.orientation.angle : (window.orientation || 0);
     const a = ((ang % 360) + 360) % 360;
-    // screen right / up expressed in device coordinates
     const map = { 0: [[1, 0, 0], [0, 1, 0]], 90: [[0, -1, 0], [1, 0, 0]], 180: [[-1, 0, 0], [0, -1, 0]], 270: [[0, 1, 0], [-1, 0, 0]] };
     const [r, u] = map[a] || map[0];
     return { F: col([0, 0, -1]), Rt: col(r), U: col(u) };
@@ -948,33 +1234,100 @@ class PanoViewer {
     const cy = Math.cos(this.yaw), sy = Math.sin(this.yaw), cp = Math.cos(this.pitch), sp = Math.sin(this.pitch);
     return { F: [cp * sy, cp * cy, sp], Rt: [cy, -sy, 0], U: [-sp * sy, -sp * cy, cp] };
   }
-  start() { if (this.running) return; this.running = true; const loop = () => { if (!this.running) return; this.draw(); requestAnimationFrame(loop); }; loop(); }
+  viewYawDeg() { const F = this.basis().F; return Math.atan2(F[0], F[1]) * R2D; }
+  start() { if (this.running) return; this.running = true; const loop = (now) => { if (!this.running) return; this.draw(now || performance.now()); requestAnimationFrame(loop); }; requestAnimationFrame(loop); }
   stop() { this.running = false; }
-  draw() {
+  draw(now) {
     const gl = this.gl;
-    if (this.c.width !== Math.round(this.c.clientWidth * Math.min(window.devicePixelRatio || 1, 2))) this.resize();
+    if (this.c.width !== Math.max(1, Math.round(this.c.clientWidth * Math.min(window.devicePixelRatio || 1, 2)))) this.resize();
     gl.viewport(0, 0, this.c.width, this.c.height);
-    const b = this.basis(), t = Math.tan(this.fov * D2R / 2), asp = this.c.width / this.c.height;
-    gl.uniform3fv(this.u.F, b.F); gl.uniform3fv(this.u.Rt, b.Rt); gl.uniform3fv(this.u.U, b.U);
-    gl.uniform2f(this.u.sc, t * asp, t);
+    if (!this.A) { gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); return; }
+    let P = [0, 0, 0], cB = [0, 0, 0], pc = [0, 0, 0], mixT = 0, moving = 0, prr = 10, floorZ = -1.6, ceilZ = 1e4;
+    if (this.move) {
+      const m = this.move, t = (now - m.start) / m.dur;
+      if (t >= 1) { this.A = this.B; this.B = null; this.move = null; m.done(); }
+      else {
+        const e = easeInOut(Math.max(0, t));
+        P = m.c.map(v => v * e); cB = m.c; pc = m.c.map(v => v / 2);
+        mixT = smoothstep(0.25, 0.8, t); moving = 1; prr = m.pr; floorZ = m.floorZ; ceilZ = m.ceilZ;
+      }
+    }
+    const b = this.basis(), tn = Math.tan(this.fov * D2R / 2), asp = this.c.width / this.c.height;
+    const B = this.B || this.A;
+    gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, this.A.tex);
+    gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, B.tex);
+    const u = this.u;
+    gl.uniform3fv(u.F, b.F); gl.uniform3fv(u.Rt, b.Rt); gl.uniform3fv(u.U, b.U); gl.uniform2f(u.sc, tn * asp, tn);
+    gl.uniform3fv(u.P, P); gl.uniform3fv(u.cB, cB); gl.uniform3fv(u.pc, pc);
+    gl.uniform1f(u.hA, this.A.h); gl.uniform1f(u.hB, B.h); gl.uniform1f(u.mixT, mixT); gl.uniform1f(u.moving, moving);
+    gl.uniform1f(u.pr, prr); gl.uniform1f(u.floorZ, floorZ); gl.uniform1f(u.ceilZ, ceilZ);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    this.drawHot(b, tn * asp, tn);
+  }
+  // Floor circles that lead to the next sphere.
+  drawHot(b, sx, sy) {
+    const ctx = this.hctx, W = this.hot.width, H = this.hot.height, k = W / Math.max(1, this.hot.clientWidth);
+    ctx.clearRect(0, 0, W, H);
+    for (const l of this.links) l._s = null;
+    if (this.move || !this.links.length) return;
+    const proj = (p) => { const z = dot3(p, b.F); if (z < 0.05) return null; return [(dot3(p, b.Rt) / z / sx + 1) / 2 * W, (1 - dot3(p, b.U) / z / sy) / 2 * H]; };
+    ctx.lineJoin = 'round';
+    for (const l of this.links) {
+      const pts = [];
+      let ok = true;
+      for (let i = 0; i < 32; i++) {
+        const a = i / 32 * Math.PI * 2;
+        const q = proj([l.pos[0] + 0.32 * Math.cos(a), l.pos[1] + 0.32 * Math.sin(a), l.pos[2]]);
+        if (!q) { ok = false; break; } pts.push(q);
+      }
+      const c = proj(l.pos);
+      if (!ok || !c) continue;
+      ctx.beginPath(); pts.forEach((q, i) => i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])); ctx.closePath();
+      ctx.fillStyle = 'rgba(255,255,255,.28)'; ctx.fill();
+      ctx.setLineDash(l.auto && this.editing ? [8 * k, 6 * k] : []);
+      ctx.lineWidth = 3 * k; ctx.strokeStyle = 'rgba(255,255,255,.95)'; ctx.stroke(); ctx.setLineDash([]);
+      ctx.beginPath(); ctx.arc(c[0], c[1], 4 * k, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill();
+      let top = Infinity, rad = 0;
+      for (const q of pts) { top = Math.min(top, q[1]); rad = Math.max(rad, Math.hypot(q[0] - c[0], q[1] - c[1])); }
+      if (l.label) {
+        ctx.font = `600 ${13 * k}px -apple-system, Helvetica, Arial, sans-serif`; ctx.textAlign = 'center';
+        const tw = ctx.measureText(l.label).width;
+        ctx.fillStyle = 'rgba(0,0,0,.6)';
+        ctx.fillRect(c[0] - tw / 2 - 7 * k, top - 28 * k, tw + 14 * k, 21 * k);
+        ctx.fillStyle = '#fff'; ctx.fillText(l.label, c[0], top - 13 * k);
+      }
+      l._s = [c[0] / k, c[1] / k]; l._r = rad / k;
+    }
   }
 }
 
 let viewer = null, current = null, currentUrl = null;
+function ensureViewer() {
+  if (!viewer) { viewer = new PanoViewer($('#glcanvas'), $('#hot')); viewer.onHotspot = (l) => onHotspot(l); }
+  viewer.resize();
+}
 
-function loadImage(blob) {
-  return new Promise((res, rej) => { const u = URL.createObjectURL(blob); const im = new Image(); im.onload = () => res({ im, u }); im.onerror = () => rej(new Error('Could not open the image.')); im.src = u; });
+// mode: single | edit | play | place | player
+function setViewerUI(mode) {
+  $('#viewerBar').style.display = mode === 'single' ? '' : 'none';
+  $('#tourBar').style.display = mode === 'edit' ? 'block' : 'none';
+  $('#playBar').style.display = mode === 'play' ? 'block' : 'none';
+  $('#placeBar').style.display = mode === 'place' ? 'block' : 'none';
+  $('#crosshair').style.display = mode === 'place' ? 'block' : 'none';
+  $('#btnBack').style.visibility = mode === 'player' ? 'hidden' : 'visible';
+  viewer.editing = mode === 'edit' || mode === 'place';
+  viewer.placing = mode === 'place';
 }
 
 async function openViewer(item, fresh) {
-  current = item;
+  current = item; tour = null;
   show('viewer');
-  try { if (!viewer) viewer = new PanoViewer($('#glcanvas')); } catch (e) { toast(e.message, 4000); show('home'); return; }
-  viewer.resize();
+  try { ensureViewer(); } catch (e) { toast(e.message, 4000); show('home'); return; }
+  setViewerUI('single'); viewer.links = [];
   if (currentUrl) URL.revokeObjectURL(currentUrl);
-  const { im, u } = await loadImage(item.blob); currentUrl = u;
-  viewer.setImage(im);
+  currentUrl = URL.createObjectURL(item.blob);
+  try { await viewer.show('p' + item.id + ':' + item.blob.size, item.blob, 0); }
+  catch (e) { toast(e.message, 4000); show('home'); return; }
   viewer.yaw = 0; viewer.pitch = 0; viewer.fov = 80;
   viewer.start();
   $('#viewerTitle').textContent = item.imported ? 'Imported 360°' : new Date(item.id).toLocaleDateString();
@@ -984,22 +1337,29 @@ async function openViewer(item, fresh) {
   if (fresh) toast('Saved in Orbit 360. Tap Save / Share to put it in Photos.', 3500);
 }
 
-$('#btnBack').onclick = () => { if (viewer) { viewer.stop(); viewer.setGyro(false); $('#btnGyro').classList.remove('on'); } show('home'); };
+function leaveViewer() {
+  if (viewer) { viewer.stop(); if (viewer.gyro) viewer.setGyro(false); $('#btnGyro').classList.remove('on'); }
+  tour = null; placing = null;
+  show('home'); renderGallery();
+}
+$('#btnBack').onclick = () => leaveViewer();
 $('#btnGyro').onclick = async () => {
   if (!viewer) return;
   if (!viewer.gyro) { try { await ensureMotion(); } catch (e) { toast(e.message, 4000); return; } }
   viewer.setGyro(!viewer.gyro);
   $('#btnGyro').classList.toggle('on', viewer.gyro);
 };
-$('#btnSave').onclick = async () => {
-  if (!current) return;
-  const name = 'orbit360-' + new Date(current.id).toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.jpg';
-  const file = new File([current.blob], name, { type: 'image/jpeg' });
+async function saveFile(blob, name, title) {
+  const file = new File([blob], name, { type: blob.type });
   try {
-    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: '360° photo' }); return; }
+    if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title }); return; }
   } catch (e) { if (e && e.name === 'AbortError') return; }
   const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = name; document.body.appendChild(a); a.click();
-  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 4000);
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 10000);
+}
+$('#btnSave').onclick = () => {
+  if (!current) return;
+  saveFile(current.blob, 'orbit360-' + new Date(current.id).toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.jpg', '360° photo');
 };
 $('#btnFlat').onclick = () => { if (!currentUrl) return; $('#flatImg').src = currentUrl; $('#flatModal').classList.add('on'); };
 $('#btnFlatClose').onclick = () => $('#flatModal').classList.remove('on');
@@ -1008,7 +1368,7 @@ $('#btnDelete').onclick = async () => {
   if (!(await askConfirm('Delete this 360° photo?', 'Delete'))) return;
   try { await DB.del(current.id); } catch (e) {}
   if (session && session.id === current.id) { session = null; if (worker) { worker.terminate(); worker = null; } }
-  viewer.stop(); show('home'); renderGallery();
+  leaveViewer();
 };
 
 // Adjust
@@ -1027,13 +1387,362 @@ function restitch(auto) {
 $('#btnRestitch').onclick = () => restitch(false);
 $('#btnAuto').onclick = () => restitch(true);
 
-// Import an existing equirectangular image
+/* =====================================================================
+   TOURS
+   A tour = spheres (nodes) + links. Each node has a heading: the compass
+   direction its photo's centre faces. A link from A to B is the spot on
+   A's floor where B was shot (lon/lat in A's own photo). Two links placed
+   in both directions line the spheres up exactly.
+   ===================================================================== */
+let tour = null, tourMode = null, tourNode = null, placing = null, walking = false;
+let tourSrc = new Map(), stripUrls = new Map();
+
+function tn(id) { return tour && tour.nodes.find(n => n.pano === id); }
+function nodeLabel(id) { const i = tour.nodes.findIndex(n => n.pano === id); const n = tour.nodes[i]; return (n && n.name) || ('Sphere ' + (i + 1)); }
+function linkVec(l) {
+  const n = tn(l.from), h = tour.camHeight;
+  const th = (n.heading + l.lon) * D2R, lat = Math.min(l.lat, -1.5) * D2R;
+  const d = Math.max(0.4, Math.min(20, h / Math.tan(-lat)));
+  return { th, d, pos: [d * Math.sin(th), d * Math.cos(th), -h] };
+}
+function rebuildAutoLinks() {
+  tour.links = tour.links.filter(l => !l.auto && tn(l.from) && tn(l.to));
+  const manual = tour.links.slice();
+  for (const l of manual) {
+    if (manual.some(m => m.from === l.to && m.to === l.from)) continue;
+    if ((tour.blocked || []).includes(l.to + '>' + l.from)) continue;
+    const A = tn(l.from), B = tn(l.to);
+    tour.links.push({ from: l.to, to: l.from, lon: wrapDeg(A.heading + l.lon + 180 - B.heading), lat: l.lat, auto: true });
+  }
+}
+async function saveTour() {
+  if (!tour || tourMode === 'player') return;
+  try { await DB.putTour(tour); } catch (e) { toast('Could not save the tour.'); }
+}
+async function loadTourSources() {
+  for (const n of tour.nodes) {
+    if (tourSrc.has(n.pano)) continue;
+    let it = galleryItems.find(i => i.id === n.pano);
+    if (!it) { try { it = await DB.get(n.pano); } catch (e) { it = null; } }
+    if (it) tourSrc.set(n.pano, { blob: it.blob, thumb: it.thumb || it.blob, key: 'p' + it.id + ':' + it.blob.size });
+  }
+}
+
+async function openTour(t, mode) {
+  tour = t; tourMode = mode; placing = null;
+  tour.camHeight = tour.camHeight || 1.6; tour.space = tour.space || 'room'; tour.speed = tour.speed || 1;
+  tour.links = tour.links || []; tour.blocked = tour.blocked || [];
+  if (mode !== 'player') {
+    tourSrc = new Map();
+    stripUrls.forEach(u => URL.revokeObjectURL(u)); stripUrls = new Map();
+    await loadTourSources();
+    const before = tour.nodes.length;
+    tour.nodes = tour.nodes.filter(n => tourSrc.has(n.pano));
+    if (before !== tour.nodes.length) { rebuildAutoLinks(); saveTour(); }
+  }
+  if (!tour.nodes.length) { toast('This tour has no spheres left.'); tour = null; show('home'); return; }
+  show('viewer');
+  try { ensureViewer(); } catch (e) { toast(e.message, 4000); show('home'); return; }
+  setViewerUI(mode === 'player' ? 'player' : (mode === 'play' ? 'play' : 'edit'));
+  $('#viewerTitle').textContent = tour.name || 'Tour';
+  const st = (tour.start && tn(tour.start.pano)) ? tour.start : { pano: tour.nodes[0].pano, yaw: tour.nodes[0].heading, pitch: 0 };
+  await goNode(st.pano);
+  viewer.yaw = st.yaw * D2R; viewer.pitch = (st.pitch || 0) * D2R; viewer.fov = 80;
+  viewer.start();
+}
+
+async function goNode(id, link) {
+  if (walking) return;
+  const src = tourSrc.get(id), n = tn(id);
+  if (!src || !n) return;
+  walking = true;
+  try {
+    if (link) {
+      const v = linkVec(link), sp = SPACES[tour.space] || SPACES.room;
+      const dur = Math.min(1600, 650 + 160 * v.d) * (tour.speed || 1);
+      await viewer.moveTo(src.key, src.blob || src.url, n.heading, [v.pos[0], v.pos[1], 0],
+        { dur, pr: v.d / 2 + sp.wall, floorZ: -tour.camHeight, ceilZ: sp.ceil });
+    } else {
+      await viewer.show(src.key, src.blob || src.url, n.heading);
+    }
+    tourNode = id;
+  } catch (e) { toast('Could not open that sphere.'); }
+  walking = false;
+  refreshHotspots(); renderStrip();
+  for (const l of tour.links) if (l.from === id) {
+    const s = tourSrc.get(l.to);
+    if (s) viewer.texFor(s.key, s.blob || s.url).catch(() => {});
+  }
+}
+
+function refreshHotspots() {
+  if (!viewer || !tour) return;
+  viewer.links = tour.links.filter(l => l.from === tourNode && tn(l.to))
+    .map(l => ({ pos: linkVec(l).pos, label: nodeLabel(l.to), auto: !!l.auto, data: l }));
+}
+
+function renderStrip() {
+  const s = $('#strip');
+  if (!tour || tourMode !== 'edit') return;
+  s.innerHTML = '';
+  tour.nodes.forEach((n) => {
+    const src = tourSrc.get(n.pano);
+    if (!stripUrls.has(n.pano) && src && src.thumb) stripUrls.set(n.pano, URL.createObjectURL(src.thumb));
+    const b = document.createElement('button');
+    if (n.pano === tourNode) b.className = 'cur';
+    b.innerHTML = `<img alt="" src="${stripUrls.get(n.pano) || ''}"><span></span>`;
+    b.querySelector('span').textContent = nodeLabel(n.pano);
+    b.onclick = () => { if (n.pano !== tourNode) goNode(n.pano); };
+    s.appendChild(b);
+    if (n.pano === tourNode) setTimeout(() => { try { s.scrollLeft = b.offsetLeft - s.clientWidth / 2 + b.clientWidth / 2; } catch (e) {} }, 0);
+  });
+}
+
+function actionSheet(title, actions) {
+  $('#actTitle').textContent = title;
+  const box = $('#actBtns'); box.innerHTML = '';
+  actions.concat([{ label: 'Cancel' }]).forEach(a => {
+    const b = document.createElement('button');
+    b.className = 'btn' + (a.primary ? ' primary' : ''); b.style.cssText = 'width:100%;margin-top:8px';
+    b.textContent = a.label;
+    b.onclick = () => { $('#actModal').classList.remove('on'); if (a.fn) a.fn(); };
+    box.appendChild(b);
+  });
+  $('#actModal').classList.add('on');
+}
+
+function onHotspot(l) {
+  if (!tour || viewer.placing) return;
+  if (tourMode !== 'edit') { goNode(l.to, l); return; }
+  const name = nodeLabel(l.to);
+  actionSheet(l.auto ? `Automatic link to “${name}”` : `Link to “${name}”`, [
+    { label: `Walk to “${name}”`, primary: true, fn: () => goNode(l.to, l) },
+    { label: l.auto ? 'Place this link myself (more precise)' : 'Move this link', fn: () => startPlacing(l.to) },
+    { label: 'Delete this link', fn: () => {
+        if (l.auto) tour.blocked.push(l.from + '>' + l.to);
+        else tour.links = tour.links.filter(x => x !== l);
+        rebuildAutoLinks(); saveTour(); refreshHotspots();
+      } }
+  ]);
+}
+
+// --- placing links ---
+$('#btnAddLink').onclick = () => {
+  const others = tour.nodes.filter(n => n.pano !== tourNode);
+  if (!others.length) { toast('Add another sphere to the tour first (Tour ⚙ › Add spheres).', 3500); return; }
+  const g = $('#targetGrid'); g.innerHTML = '';
+  for (const n of others) {
+    const b = document.createElement('button');
+    const linked = tour.links.some(l => l.from === tourNode && l.to === n.pano && !l.auto);
+    b.innerHTML = `<img alt="" src="${stripUrls.get(n.pano) || ''}"><span class="num"></span>`;
+    b.querySelector('.num').textContent = nodeLabel(n.pano) + (linked ? ' · linked' : '');
+    b.onclick = () => { $('#targetModal').classList.remove('on'); startPlacing(n.pano); };
+    g.appendChild(b);
+  }
+  $('#targetModal').classList.add('on');
+};
+$('#btnTargetCancel').onclick = () => $('#targetModal').classList.remove('on');
+
+function startPlacing(targetId) {
+  placing = targetId;
+  setViewerUI('place');
+  $('#placeText').textContent = `Aim the orange cross at the floor where you stood to shoot “${nodeLabel(targetId)}”.`;
+  if (!viewer.gyro && viewer.pitch > -12 * D2R) viewer.pitch = -28 * D2R;
+}
+$('#btnPlaceCancel').onclick = () => { placing = null; setViewerUI('edit'); };
+$('#btnPlace').onclick = () => {
+  if (!placing) return;
+  const F = viewer.basis().F;
+  const lat = Math.asin(clamp1(F[2])) * R2D;
+  if (lat > -4) { toast('Aim lower, at the floor where you stood.'); return; }
+  const X = tourNode, Y = placing, nX = tn(X), nY = tn(Y);
+  const lon = wrapDeg(Math.atan2(F[0], F[1]) * R2D - nX.heading);
+  tour.links = tour.links.filter(l => !(l.from === X && l.to === Y));
+  tour.blocked = tour.blocked.filter(k => k !== X + '>' + Y);
+  const rev = tour.links.find(l => l.from === Y && l.to === X && !l.auto);
+  let msg;
+  if (rev) {
+    const old = nX.heading;
+    nX.heading = wrapDeg(nY.heading + rev.lon + 180 - lon);
+    const delta = (nX.heading - old) * D2R;          // keep the picture still on screen
+    viewer.yaw += delta; if (viewer.gyro) viewer.gyroOffset += delta;
+    if (viewer.A) viewer.A.h = nX.heading * D2R;
+    msg = `Linked both ways. “${nodeLabel(X)}” is now lined up with “${nodeLabel(Y)}”.`;
+  } else {
+    msg = `Linked. A return link was added in “${nodeLabel(Y)}”. Place it there yourself for a perfect match.`;
+  }
+  tour.links.push({ from: X, to: Y, lon, lat });
+  rebuildAutoLinks(); saveTour();
+  placing = null; setViewerUI('edit'); refreshHotspots();
+  toast(msg, 4200);
+};
+
+// --- this sphere ---
+let sphBase = 0;
+$('#btnSphere').onclick = () => {
+  const n = tn(tourNode);
+  $('#sphName').value = n.name || ''; $('#sphName').placeholder = nodeLabel(tourNode);
+  sphBase = n.heading; $('#sphRot').value = 0; $('#sphRotVal').textContent = '0°';
+  $('#sphereModal').classList.add('on');
+};
+$('#sphRot').oninput = () => {
+  const n = tn(tourNode), v = +$('#sphRot').value, old = n.heading;
+  n.heading = wrapDeg(sphBase + v);
+  viewer.yaw += (n.heading - old) * D2R; if (viewer.gyro) viewer.gyroOffset += (n.heading - old) * D2R;
+  if (viewer.A) viewer.A.h = n.heading * D2R;
+  $('#sphRotVal').textContent = v + '°';
+};
+$('#btnSphereClose').onclick = () => {
+  const n = tn(tourNode); n.name = $('#sphName').value.trim();
+  $('#sphereModal').classList.remove('on');
+  rebuildAutoLinks(); saveTour(); refreshHotspots(); renderStrip();
+};
+$('#btnSetStart').onclick = () => {
+  tour.start = { pano: tourNode, yaw: viewer.viewYawDeg(), pitch: Math.asin(clamp1(viewer.basis().F[2])) * R2D };
+  saveTour(); toast('Visitors will start here, looking this way.');
+};
+$('#btnRemoveSphere').onclick = async () => {
+  $('#sphereModal').classList.remove('on');
+  if (tour.nodes.length <= 1) { toast('A tour needs at least one sphere.'); return; }
+  if (!(await askConfirm('Remove this sphere from the tour?', 'Remove'))) return;
+  const id = tourNode;
+  tour.nodes = tour.nodes.filter(n => n.pano !== id);
+  tour.links = tour.links.filter(l => l.from !== id && l.to !== id);
+  if (tour.start && tour.start.pano === id) tour.start = null;
+  rebuildAutoLinks(); await saveTour();
+  goNode(tour.nodes[0].pano);
+};
+
+// --- preview ---
+$('#btnPreview').onclick = () => { tourMode = 'play'; setViewerUI('play'); };
+$('#btnEditTour').onclick = () => { tourMode = 'edit'; setViewerUI('edit'); renderStrip(); };
+
+// --- tour settings ---
+$('#btnTourSet').onclick = () => {
+  $('#tName').value = tour.name || ''; $('#tSpace').value = tour.space;
+  $('#tHeight').value = tour.camHeight; $('#tHeightVal').textContent = (+tour.camHeight).toFixed(2) + ' m';
+  $('#tSpeed').value = String(tour.speed);
+  $('#tourModal').classList.add('on');
+};
+$('#tHeight').oninput = () => { $('#tHeightVal').textContent = (+$('#tHeight').value).toFixed(2) + ' m'; };
+function readTourSettings() {
+  tour.name = $('#tName').value.trim() || tour.name || 'My tour';
+  tour.space = $('#tSpace').value; tour.camHeight = +$('#tHeight').value; tour.speed = +$('#tSpeed').value;
+  $('#viewerTitle').textContent = tour.name;
+  refreshHotspots(); saveTour();
+}
+$('#btnTourClose').onclick = () => { readTourSettings(); $('#tourModal').classList.remove('on'); };
+$('#btnAddSpheres').onclick = () => { readTourSettings(); $('#tourModal').classList.remove('on'); openPicker('add'); };
+$('#btnDeleteTour').onclick = async () => {
+  $('#tourModal').classList.remove('on');
+  if (!(await askConfirm('Delete this tour? (Your spheres are kept.)', 'Delete'))) return;
+  try { await DB.delTour(tour.id); } catch (e) {}
+  leaveViewer();
+};
+$('#btnShareTour').onclick = () => { readTourSettings(); $('#tourModal').classList.remove('on'); exportTour(); };
+
+// --- choose spheres ---
+let pickMode = null, pickSel = [], pickUrls = [];
+async function openPicker(mode) {
+  pickMode = mode; pickSel = [];
+  let items = [];
+  try { items = await DB.all() || []; } catch (e) {}
+  items.sort((a, b) => a.id - b.id);
+  const avail = mode === 'add' ? items.filter(i => !tn(i.id)) : items;
+  if (!avail.length) { toast(mode === 'add' ? 'All your spheres are already in this tour.' : 'Take a few 360° photos first.', 3000); return; }
+  $('#pickTitle').textContent = mode === 'add' ? 'Add spheres' : 'New tour';
+  $('#pickNameWrap').style.display = mode === 'add' ? 'none' : '';
+  $('#btnPickOk').textContent = mode === 'add' ? 'Add' : 'Create tour';
+  if (mode !== 'add') $('#pickName').value = '';
+  pickUrls.forEach(u => URL.revokeObjectURL(u)); pickUrls = [];
+  const g = $('#pickGrid'); g.innerHTML = '';
+  const refresh = () => [...g.children].forEach(b => {
+    const k = pickSel.indexOf(+b.dataset.id);
+    b.classList.toggle('sel', k >= 0);
+    b.querySelector('.num').textContent = k >= 0 ? String(k + 1) : new Date(+b.dataset.id).toLocaleDateString();
+  });
+  for (const it of avail) {
+    const u = URL.createObjectURL(it.thumb || it.blob); pickUrls.push(u);
+    const b = document.createElement('button'); b.dataset.id = it.id;
+    b.innerHTML = `<img alt="" src="${u}"><span class="num"></span>`;
+    b.onclick = () => { const k = pickSel.indexOf(it.id); if (k >= 0) pickSel.splice(k, 1); else pickSel.push(it.id); refresh(); };
+    g.appendChild(b);
+  }
+  refresh();
+  $('#pickModal').classList.add('on');
+}
+$('#btnPickCancel').onclick = () => $('#pickModal').classList.remove('on');
+$('#btnPickOk').onclick = async () => {
+  const headingOf = (id) => { const it = galleryItems.find(i => i.id === id); return (it && typeof it.heading === 'number') ? it.heading : 0; };
+  if (pickMode === 'new') {
+    if (pickSel.length < 2) { toast('Pick at least 2 spheres.'); return; }
+    const t = { id: Date.now(), name: $('#pickName').value.trim() || 'My tour', camHeight: 1.6, space: 'room', speed: 1,
+      nodes: pickSel.map(id => ({ pano: id, heading: headingOf(id), name: '' })), links: [], blocked: [], start: null };
+    try { await DB.putTour(t); } catch (e) { toast('Could not save the tour.'); return; }
+    $('#pickModal').classList.remove('on');
+    await openTour(t, 'edit');
+    toast('Tap ＋ Link to connect this sphere to the next one.', 4000);
+  } else {
+    if (!pickSel.length) { $('#pickModal').classList.remove('on'); return; }
+    pickSel.forEach(id => tour.nodes.push({ pano: id, heading: headingOf(id), name: '' }));
+    await loadTourSources(); await saveTour(); renderStrip();
+    $('#pickModal').classList.remove('on');
+  }
+};
+$('#btnNewTour').onclick = () => openPicker('new');
+
+// --- export a self-contained tour page ---
+function blobToDataURL(b) { return new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = () => rej(r.error); r.readAsDataURL(b); }); }
+function escHtml(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+async function exportTour() {
+  if (!tour) return;
+  if (!tour.links.length) { toast('Add at least one link before sharing.'); return; }
+  toast('Preparing your tour page…', 8000);
+  try {
+    let src = null;
+    try {
+      const r = await fetch(location.href.split('#')[0].split('?')[0], { cache: 'no-store' });
+      if (r.ok) { src = await r.text(); if (!src.includes('ORBIT_APP_SOURCE')) src = null; }
+    } catch (e) {}
+    if (!src) src = '<!DOCTYPE html>\n' + document.documentElement.outerHTML;
+    const nodes = [];
+    for (const n of tour.nodes) {
+      const s = tourSrc.get(n.pano);
+      nodes.push({ pano: n.pano, heading: n.heading, name: n.name || '', img: await blobToDataURL(s.blob) });
+    }
+    const data = { name: tour.name, camHeight: tour.camHeight, space: tour.space, speed: tour.speed, start: tour.start, nodes, links: tour.links };
+    const inject = '<scr' + 'ipt>window.ORBIT_TOUR=' + JSON.stringify(data).replace(/</g, '\\u003c') + ';<\/script>';
+    let html = src.replace(/<link rel="manifest"[^>]*>\n?/, '')
+      .replace(/<title>[^<]*<\/title>/, '<title>' + escHtml(tour.name) + ' · 360° tour</title>');
+    html = html.replace('</head>', inject + '\n</head>');
+    const slug = (tour.name || 'tour').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'tour';
+    $('#toast').classList.remove('on');
+    await saveFile(new Blob([html], { type: 'text/html' }), slug + '.html', tour.name);
+  } catch (e) { toast('Could not build the tour page: ' + (e.message || e), 5000); }
+}
+
+// --- exported tour player ---
+async function bootPlayer(T) {
+  tourSrc = new Map();
+  T.nodes.forEach(n => tourSrc.set(n.pano, { url: n.img, key: 't' + n.pano }));
+  const t = { id: 0, name: T.name, camHeight: T.camHeight, space: T.space, speed: T.speed, start: T.start,
+    nodes: T.nodes.map(n => ({ pano: n.pano, heading: n.heading, name: n.name })), links: T.links, blocked: [] };
+  $('#introTitle').textContent = T.name || '360° tour';
+  $('#playerIntro').style.display = 'flex';
+  await openTour(t, 'player');
+}
+$('#btnIntroGo').onclick = () => { $('#playerIntro').style.display = 'none'; };
+$('#btnIntroGyro').onclick = async () => {
+  $('#playerIntro').style.display = 'none';
+  try { await ensureMotion(); viewer.setGyro(true); $('#btnGyro').classList.add('on'); } catch (e) { toast(e.message, 4000); }
+};
+
+/* ---------------- misc ---------------- */
 $('#importFile').onchange = async (e) => {
   const f = e.target.files && e.target.files[0]; e.target.value = '';
   if (!f) return;
   openViewer({ id: Date.now(), blob: f, imported: true }, false);
 };
-
 $('#btnNew').onclick = () => startCapture();
 document.addEventListener('visibilitychange', async () => {
   if (document.hidden && capturing && frames.length === 0) { stopStream(); show('home'); return; }
@@ -1046,7 +1755,8 @@ document.addEventListener('visibilitychange', async () => {
   }
 });
 
-renderGallery();
+if (window.ORBIT_TOUR) bootPlayer(window.ORBIT_TOUR);
+else renderGallery();
 </script>
 </body>
 </html>
