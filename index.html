@@ -93,6 +93,7 @@
   .toast.on { opacity: 1; }
   .modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; align-items: flex-end; z-index: 40; }
   .modal.on { display: flex; }
+  .lensbtn.on { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
   .modal .sheet { position: relative; left: auto; right: auto; bottom: auto; margin: 12px; margin-bottom: calc(var(--sb) + 12px); width: 100%; max-height: calc(100% - var(--st) - var(--sb) - 40px); overflow-y: auto; -webkit-overflow-scrolling: touch; }
 
   /* Tours */
@@ -173,12 +174,26 @@
   <div id="hint"><span id="hintText">Aim at the white dot</span></div>
   <div class="bottombar">
     <canvas id="minimap" width="300" height="150"></canvas>
-    <button id="btnDone" class="btn primary" disabled>Stitch ➜</button>
+    <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
+      <button id="btnCam" class="btn ghost small">⟲ Front camera</button>
+      <button id="btnDone" class="btn primary" disabled>Stitch ➜</button>
+    </div>
   </div>
   <div id="startSheet" class="sheet">
     <h3>Ready?</h3>
     <p>Stand where you want the centre of your sphere. Hold the phone upright at eye level and point it straight ahead at the horizon. That direction becomes the front of your photo.</p>
+    <div class="row" style="margin:0 0 6px">
+      <button class="btn small lensbtn" data-lens="main">Main camera 1×</button>
+      <button class="btn small lensbtn" data-lens="ultra" id="lensUltra">Ultra-wide 0.5×</button>
+    </div>
+    <label class="chk" style="margin:6px 0"><input id="tripodChk" type="checkbox"> On a tripod (the front camera does the floor)</label>
+    <p id="planText" style="font-size:13px;margin:0 0 12px"></p>
     <button id="btnStart" class="btn primary bigbtn">Start capturing</button>
+  </div>
+  <div id="camSheet" class="sheet" style="display:none">
+    <h3 id="camTitle"></h3>
+    <p id="camText"></p>
+    <button id="btnCamSwitch" class="btn primary bigbtn"></button>
   </div>
   <div id="rotateWarn">Please hold your phone upright (portrait).</div>
 </section>
@@ -242,9 +257,7 @@
   <div class="sheet">
     <h3>Adjust stitching</h3>
     <p>If straight lines are doubled or bent at the seams, try a different lens field of view and re-stitch.</p>
-    <label class="field">Lens field of view: <b id="fovVal">70°</b>
-      <input id="fovRange" type="range" min="50" max="90" step="0.5" value="70">
-    </label>
+    <div id="fovBox"></div>
     <label class="field">Resolution
       <select id="resSel">
         <option value="2048">Standard: 2048 × 1024 (fast)</option>
@@ -507,41 +520,99 @@ const mm = $('#minimap'), mctx = mm.getContext('2d');
 const grab = document.createElement('canvas'), gctx = grab.getContext('2d', { willReadFrequently: true });
 let stream = null, targets = [], frames = [], yaw0 = null, capturing = false, rafId = 0, captureHeading = null;
 let holdStart = 0, lastF = null, lastT = 0, speed = 0;
-let fovLong = parseFloat(store('fovLong')) || 70;
+/* Cameras: main (1×), ultra-wide (0.5×) and front. Each has its own field of view (long side, degrees),
+   measured automatically the first time it's used. The front camera looks out of the screen side, so its
+   shots are stored as if a back camera were turned around (R × FLIP): the stitcher treats all shots alike. */
+const LENS_DEFAULT = { main: 70, ultra: 104, front: 74 };
+const LENS_NAME = { main: 'Main camera (1×)', ultra: 'Ultra-wide (0.5×)', front: 'Front camera' };
+const fovs = {};
+for (const k in LENS_DEFAULT) fovs[k] = parseFloat(store('fov_' + k)) || (k === 'main' && parseFloat(store('fovLong'))) || LENS_DEFAULT[k];
+const isCal = (k) => store('fovCal_' + k) === '1' || (k === 'main' && store('fovCalibrated') === '1');
+function setFov(k, v, cal) { fovs[k] = v; store('fov_' + k, String(v)); if (cal) store('fovCal_' + k, '1'); }
+const FLIP = [-1, 0, 0, 0, 1, 0, 0, 0, -1];
+let camIds = {}, curCam = 'main', camBusy = false, camPrompted = null;
+let lens = store('lens') === 'ultra' ? 'ultra' : 'main', tripod = store('tripod') === '1';
 
-function makeTargets() {
+function makeTargets(lensKey, onTripod) {
+  const fov = fovs[lensKey] || 70, tl = Math.tan(fov * D2R / 2);
+  const short = 2 * Math.atan(tl * 0.75) * R2D;               // the narrow side of the picture (portrait: width)
+  const n0 = Math.max(6, Math.ceil(360 / (short * 0.55)));    // shots around the horizon
+  const n45 = Math.max(4, Math.ceil(n0 * 0.66));               // shots in the rows tilted 45° up / down
+  const poles = fov / 2 + 45 < 96;                             // a wide lens covers straight up/down from the 45° rows
   const t = [];
-  for (let i = 0; i < 12; i++) t.push({ yaw: i * 30, pitch: 0 });
-  for (let i = 0; i < 8; i++) t.push({ yaw: i * 45 + 22.5, pitch: 45 });
-  for (let i = 0; i < 8; i++) t.push({ yaw: i * 45, pitch: -45 });
-  t.push({ yaw: 0, pitch: 90 });
-  t.push({ yaw: 0, pitch: -90 });
-  return t.map(o => ({ ...o, dir: dirFrom(o.yaw * D2R, o.pitch * D2R), done: false }));
+  for (let i = 0; i < n0; i++) t.push({ yaw: i * 360 / n0, pitch: 0 });
+  for (let i = 0; i < n45; i++) t.push({ yaw: (i + 0.5) * 360 / n45, pitch: 45 });
+  for (let i = 0; i < n45; i++) t.push({ yaw: i * 360 / n45, pitch: -45 });
+  if (poles) { t.push({ yaw: 0, pitch: 90 }); t.push({ yaw: 0, pitch: -90 }); }
+  return t.map(o => ({ ...o, dir: dirFrom(o.yaw * D2R, o.pitch * D2R), done: false, cam: onTripod && o.pitch < 0 ? 'front' : 'back' }));
 }
+const eligible = (t) => !t.done && (!tripod || (t.cam === 'front') === (curCam === 'front'));
 
 function camTan() {
   const vw = video.videoWidth || 3, vh = video.videoHeight || 4, L = Math.max(vw, vh);
-  const tl = Math.tan(fovLong * D2R / 2);
+  const tl = Math.tan((fovs[curCam] || 70) * D2R / 2);
   return { tx: tl * vw / L, ty: tl * vh / L };
 }
-function relR() { return mul3(yawMat(yaw0 || 0), ori.R); }
+function relR() { const R = mul3(yawMat(yaw0 || 0), ori.R); return curCam === 'front' ? mul3(R, FLIP) : R; }
+
+async function discoverCams() {
+  try {
+    const ds = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+    const lab = d => (d.label || '').toLowerCase().trim();
+    const back = ds.filter(d => !/front|facetime|user/.test(lab(d)));
+    camIds.ultra = (back.find(d => /ultra ?wide/.test(lab(d))) || {}).deviceId;
+    camIds.main = (back.find(d => lab(d) === 'back camera') || back.find(d => /back/.test(lab(d)) && !/ultra|tele|dual|triple/.test(lab(d))) || {}).deviceId;
+  } catch (e) {}
+}
+async function openCamera(kind) {
+  const base = { width: { ideal: 1920 }, height: { ideal: 1440 } }, tries = [];
+  if (kind === 'front') tries.push({ facingMode: { exact: 'user' } }, { facingMode: 'user' });
+  else if (kind === 'ultra' && camIds.ultra) tries.push({ deviceId: { exact: camIds.ultra } });
+  else { if (camIds.main) tries.push({ deviceId: { exact: camIds.main } }); tries.push({ facingMode: { ideal: 'environment' } }); }
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  let err = null;
+  for (const c of tries) { try { stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: Object.assign({}, c, base) }); break; } catch (e) { err = e; } }
+  if (!stream) throw err || new Error('That camera is not available.');
+  video.srcObject = stream;
+  try { await video.play(); } catch (e) {}
+  curCam = (kind === 'ultra' && !camIds.ultra) ? 'main' : kind;
+  lastF = null; holdStart = 0; speed = 0;
+  updateCamUI();
+}
+async function switchCam(kind) {
+  if (camBusy) return;
+  camBusy = true; $('#btnCam').disabled = true;
+  try { await openCamera(kind); } catch (e) { toast('Could not switch camera: ' + (e.message || e), 3500); }
+  camBusy = false; $('#btnCam').disabled = false;
+}
+function updateCamUI() {
+  $('#btnCam').textContent = curCam === 'front' ? '⟲ Back camera' : '⟲ Front camera';
+  document.querySelectorAll('.lensbtn').forEach(b => b.classList.toggle('on', b.dataset.lens === lens));
+  $('#lensUltra').style.display = camIds.ultra ? '' : 'none';
+  $('#tripodChk').checked = tripod;
+  const t = makeTargets(lens, tripod), nf = t.filter(x => x.cam === 'front').length, poles = t.some(x => x.pitch === 90);
+  $('#planText').textContent = `${t.length} shots.` +
+    (poles ? (tripod ? ' Tilt the phone up to 45° and straight up; the front camera then photographs the floor.' : ' Includes straight up and straight down.')
+           : (tripod ? ` Tilt up to 45° only: ${nf} floor shots are taken with the front camera.` : ' No need to point straight up or down.'));
+}
 
 async function startCapture() {
   $('#homeErr').textContent = '';
   if (!window.isSecureContext) { $('#homeErr').textContent = 'This page must be opened over https:// for the camera and motion sensors to work.'; return; }
   try {
     await ensureMotion();
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: false,
-      video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } }
-    });
+    await openCamera('main');
+    await discoverCams();
+    const dev = stream && stream.getVideoTracks()[0] && stream.getVideoTracks()[0].getSettings ? stream.getVideoTracks()[0].getSettings().deviceId : null;
+    if (lens === 'ultra' && camIds.ultra) await openCamera('ultra');
+    else if (camIds.main && dev && dev !== camIds.main) await openCamera('main');   // not the lens-switching "virtual" camera
   } catch (e) {
     const msg = (e && e.name === 'NotAllowedError') ? 'Camera access was refused. Allow camera access for this site (Settings › Safari › Camera) and try again.' : (e.message || String(e));
     $('#homeErr').textContent = msg; stopStream(); return;
   }
-  video.srcObject = stream;
-  try { await video.play(); } catch (e) {}
-  targets = makeTargets(); frames = []; yaw0 = null; holdStart = 0; lastF = null;
+  targets = []; frames = []; yaw0 = null; holdStart = 0; lastF = null; camPrompted = null;
+  $('#camSheet').style.display = 'none';
+  updateCamUI();
   $('#startSheet').style.display = 'block';
   $('#hint').style.display = 'none';
   updateCount();
@@ -575,14 +646,14 @@ function videoRect() {
 
 function updateCount() {
   const n = targets.filter(t => t.done).length;
-  $('#count').textContent = `${n} / ${targets.length}`;
+  $('#count').textContent = targets.length ? `${n} / ${targets.length}` : '';
   $('#btnUndo').disabled = frames.length === 0;
   $('#btnDone').disabled = frames.length < 2;
 }
 
 function nearestTarget(f) {
   let best = null, bestA = Infinity;
-  for (const t of targets) if (!t.done) { const a = angleBetween(f, t.dir); if (a < bestA) { bestA = a; best = t; } }
+  for (const t of targets) if (eligible(t)) { const a = angleBetween(f, t.dir); if (a < bestA) { bestA = a; best = t; } }
   return { t: best, a: bestA };
 }
 
@@ -622,6 +693,7 @@ function tick(now) {
     if (!p || Math.abs(p.px) > 1.6 || Math.abs(p.py) > 1.6) continue;
     octx.beginPath();
     if (t.done) { octx.fillStyle = 'rgba(79,209,197,.85)'; octx.arc(p.x, p.y, 7, 0, Math.PI * 2); octx.fill(); }
+    else if (!eligible(t)) { octx.strokeStyle = 'rgba(255,255,255,.35)'; octx.lineWidth = 2; octx.arc(p.x, p.y, 9, 0, Math.PI * 2); octx.stroke(); }
     else { octx.fillStyle = 'rgba(255,255,255,.95)'; octx.arc(p.x, p.y, 13, 0, Math.PI * 2); octx.fill();
       octx.beginPath(); octx.strokeStyle = 'rgba(0,0,0,.35)'; octx.lineWidth = 2; octx.arc(p.x, p.y, 13, 0, Math.PI * 2); octx.stroke(); }
   }
@@ -655,13 +727,40 @@ function tick(now) {
       drawArrow(cx, cy, ang);
     }
     $('#hintText').textContent = hintFor(best, f, aligned, still);
-  }
+  } else if (yaw0 !== null && tripod && targets.some(t => !t.done)) promptSwitch();
   drawMinimap(f);
 }
+
+function promptSwitch() {
+  const toFront = curCam !== 'front';
+  if (camPrompted === curCam || camBusy) return;
+  camPrompted = curCam;
+  $('#camTitle').textContent = toFront ? 'Now the floor' : 'Back to the main camera';
+  $('#camText').textContent = toFront
+    ? 'Switch to the front camera. Then tilt the phone UP to each dot: the front camera, on the screen side, photographs the floor.'
+    : 'A few shots are still missing for the back camera.';
+  $('#btnCamSwitch').textContent = toFront ? '⟲ Switch to the front camera' : '⟲ Switch to the back camera';
+  $('#camSheet').style.display = 'block';
+  $('#hintText').textContent = toFront ? 'Switch to the front camera' : 'Switch to the back camera';
+}
+$('#btnCamSwitch').onclick = async () => { $('#camSheet').style.display = 'none'; await switchCam(curCam === 'front' ? lens : 'front'); camPrompted = null; };
+$('#btnCam').onclick = async () => { $('#camSheet').style.display = 'none'; await switchCam(curCam === 'front' ? lens : 'front'); camPrompted = null; };
+document.querySelectorAll('.lensbtn').forEach(b => b.onclick = async () => {
+  lens = b.dataset.lens; store('lens', lens); updateCamUI();
+  if (curCam !== 'front') await switchCam(lens);
+});
+$('#tripodChk').onchange = (e) => { tripod = e.target.checked; store('tripod', tripod ? '1' : '0'); updateCamUI(); };
 
 function hintFor(t, f, aligned, still) {
   if (aligned && !still) return 'Hold still…';
   if (aligned) return 'Hold…';
+  if (curCam === 'front') {
+    if (t.pitch === -90) return 'Point the phone straight UP: the front camera sees the floor';
+    if (t.pitch === 90) return 'Point the phone straight DOWN: the front camera sees the ceiling';
+    const dpb = -(t.pitch - pitchOf(f) * R2D);                  // how the back of the phone must tilt
+    if (Math.abs(dpb) > 20) return dpb > 0 ? 'Tilt the phone up: the front camera looks at the floor' : 'Tilt the phone down';
+    return 'Turn until the white dot is in the ring, then hold still';
+  }
   if (t.pitch === 90) return 'Point straight up at the sky / ceiling';
   if (t.pitch === -90) return 'Point straight down at your feet';
   const dp = t.pitch - pitchOf(f) * R2D;
@@ -686,7 +785,7 @@ function drawMinimap(f) {
   const pos = (yawD, pitchD) => [(wrapDeg(yawD) + 180) / 360 * W, (90 - pitchD) / 180 * H];
   for (const t of targets) {
     const [x, y] = pos(t.yaw, Math.max(-84, Math.min(84, t.pitch)));
-    mctx.fillStyle = t.done ? '#4fd1c5' : 'rgba(255,255,255,.55)';
+    mctx.fillStyle = t.done ? '#4fd1c5' : eligible(t) ? 'rgba(255,255,255,.75)' : 'rgba(255,255,255,.25)';
     mctx.beginPath(); mctx.arc(x, y, t.done ? 6 : 4, 0, Math.PI * 2); mctx.fill();
   }
   if (yaw0 !== null) {
@@ -703,7 +802,7 @@ function takeShot(target, R) {
   grab.width = w; grab.height = h;
   gctx.drawImage(video, 0, 0, w, h);
   const img = gctx.getImageData(0, 0, w, h);
-  frames.push({ w, h, data: img.data, R: R.slice(), target });
+  frames.push({ w, h, data: img.data, R: R.slice(), target, lens: curCam });
   target.done = true;
   const fl = $('#flash'); fl.style.transition = 'none'; fl.style.opacity = '.55';
   requestAnimationFrame(() => { fl.style.transition = 'opacity .3s'; fl.style.opacity = '0'; });
@@ -713,10 +812,12 @@ function takeShot(target, R) {
 
 $('#btnStart').onclick = () => {
   if (!ori) { toast('Waiting for motion sensors…'); return; }
+  if (curCam === 'front') { toast('Switch back to the back camera to start.'); return; }
   const f = forwardOf(ori.R);
   if (Math.abs(pitchOf(f) * R2D) > 25) { toast('Point the phone at the horizon (hold it upright), then tap Start.'); return; }
   yaw0 = yawOf(f);
   captureHeading = compass;
+  targets = makeTargets(lens, tripod); camPrompted = null; updateCount();
   $('#startSheet').style.display = 'none';
   $('#hint').style.display = 'block';
 };
@@ -749,7 +850,7 @@ function workerMain() {
     if (m.type === 'stitch') {
       try {
         const out = stitch(frames, m.opts, (stage, p) => self.postMessage({ type: 'progress', stage, p }));
-        self.postMessage({ type: 'done', W: out.W, H: out.H, fov: out.fov, data: out.data }, [out.data.buffer]);
+        self.postMessage({ type: 'done', W: out.W, H: out.H, fovs: out.fovs, data: out.data }, [out.data.buffer]);
       } catch (err) {
         self.postMessage({ type: 'error', message: String((err && err.message) || err) });
       }
@@ -763,8 +864,9 @@ function workerMain() {
     return { sinLat, cosLat, sinLon, cosLon };
   }
 
-  function frameParams(f, fovLongRad) {
-    const tl = Math.tan(fovLongRad / 2), L = Math.max(f.w, f.h);
+  // fovs: field of view (degrees, long side) of each camera: {main, ultra, front}
+  function frameParams(f, fovs) {
+    const tl = Math.tan((fovs[f.lens || 'main'] || 70) * PI / 360), L = Math.max(f.w, f.h);
     return { tx: tl * f.w / L, ty: tl * f.h / L };
   }
 
@@ -860,8 +962,8 @@ function workerMain() {
   }
 
   // Lower = shots agree better in their overlaps.
-  function overlapScore(frames, fovRad, gains, W, H, tabs) {
-    const params = frames.map(f => frameParams(f, fovRad));
+  function overlapScore(frames, fovs, gains, W, H, tabs) {
+    const params = frames.map(f => frameParams(f, fovs));
     const S1 = new Float32Array(W * H), S2 = new Float32Array(W * H), N = new Uint8Array(W * H);
     for (let k = 0; k < frames.length; k++) {
       const g = gains[k];
@@ -875,16 +977,23 @@ function workerMain() {
     return cnt > 300 ? tot / cnt : Infinity;
   }
 
-  function calibrateFov(frames, progress) {
+  // Finds each camera's field of view: the value where neighbouring shots agree best in their overlaps.
+  function calibrateFov(frames, fovs, lenses, progress) {
     const W = 768, H = 384, tabs = tables(W, H);
-    const gains = estimateGains(frames, frames.map(f => frameParams(f, 70 * PI / 180)));
-    const evalF = (deg) => overlapScore(frames, deg * PI / 180, gains, W, H, tabs);
-    let best = 70, bestS = Infinity, step = 0;
-    const coarse = []; for (let d = 52; d <= 88; d += 3) coarse.push(d);
-    coarse.forEach((d, idx) => { const s = evalF(d); if (s < bestS) { bestS = s; best = d; } progress('Measuring your lens…', (++step) / (coarse.length + 12)); });
-    const lo = best - 3, hi = best + 3;
-    for (let d = lo; d <= hi + 1e-9; d += 0.5) { const s = evalF(d); if (s < bestS) { bestS = s; best = d; } progress('Measuring your lens…', (++step) / (coarse.length + 12)); }
-    return best;
+    fovs = Object.assign({}, fovs);
+    const gains = estimateGains(frames, frames.map(f => frameParams(f, fovs)));
+    const RANGE = { main: [52, 88], ultra: [84, 122], front: [55, 95] };
+    const order = ['main', 'ultra', 'front'].filter(l => lenses.indexOf(l) >= 0 && frames.some(f => (f.lens || 'main') === l));
+    let step = 0; const total = Math.max(1, order.length * 26);
+    for (const l of order) {
+      const r = RANGE[l]; let best = fovs[l], bestS = Infinity;
+      const ev = (d) => { fovs[l] = d; const s = overlapScore(frames, fovs, gains, W, H, tabs); progress('Measuring your lens…', Math.min(1, (++step) / total)); return s; };
+      for (let d = r[0]; d <= r[1]; d += 3) { const s = ev(d); if (s < bestS) { bestS = s; best = d; } }
+      const c = best;
+      for (let d = c - 3; d <= c + 3 + 1e-9; d += 0.5) { const s = ev(d); if (s < bestS) { bestS = s; best = d; } }
+      fovs[l] = best;
+    }
+    return fovs;
   }
 
   // Fill pixels nobody photographed (usually right under your feet) with a smooth blur of their surroundings.
@@ -941,10 +1050,9 @@ function workerMain() {
 
   function stitch(frames, opts, progress) {
     if (!frames.length) throw new Error('No photos to stitch.');
-    let fov = opts.fovLong;
-    if (opts.autoFov && frames.length >= 4) { progress('Measuring your lens…', 0); fov = calibrateFov(frames, progress); }
-    const fovRad = fov * PI / 180;
-    const params = frames.map(f => frameParams(f, fovRad));
+    let fovs = Object.assign({ main: 70, ultra: 104, front: 74 }, opts.fovs);
+    if (opts.autoLenses && opts.autoLenses.length && frames.length >= 4) { progress('Measuring your lens…', 0); fovs = calibrateFov(frames, fovs, opts.autoLenses, progress); }
+    const params = frames.map(f => frameParams(f, fovs));
     progress('Balancing brightness…', 0);
     const gains = (opts.gain && frames.length > 1) ? estimateGains(frames, params) : frames.map(() => [1, 1, 1]);
     const W = opts.width, H = W / 2, tabs = tables(W, H);
@@ -957,7 +1065,7 @@ function workerMain() {
     fillHoles(acc, W, H);
     const out = new Uint8ClampedArray(W * H * 4);
     for (let p = 0; p < W * H * 4; p += 4) { out[p] = acc[p]; out[p + 1] = acc[p + 1]; out[p + 2] = acc[p + 2]; out[p + 3] = 255; }
-    return { W, H, fov, data: out };
+    return { W, H, fovs, data: out };
   }
 
   // exposed for testing
@@ -973,14 +1081,14 @@ function newWorker() {
 
 function finishCapture() {
   if (frames.length < 2) return;
-  const shots = frames.map(f => ({ w: f.w, h: f.h, data: f.data, R: f.R }));
+  const shots = frames.map(f => ({ w: f.w, h: f.h, data: f.data, R: f.R, lens: f.lens || 'main' }));
+  const lenses = [...new Set(shots.map(s => s.lens))];
   stopStream();
   frames = [];
   newWorker();
   worker.postMessage({ type: 'frames', frames: shots }, shots.map(s => s.data.buffer));
-  session = { id: Date.now(), hasFrames: true, heading: captureHeading };
-  const calibrated = store('fovCalibrated') === '1';
-  runStitch({ fovLong: fovLong, autoFov: !calibrated, gain: true, width: parseInt(store('res') || '3072', 10) });
+  session = { id: Date.now(), hasFrames: true, heading: captureHeading, lenses };
+  runStitch({ fovs: Object.assign({}, fovs), autoLenses: lenses.filter(l => !isCal(l)), gain: true, width: parseInt(store('res') || '3072', 10) });
 }
 
 function runStitch(opts) {
@@ -994,9 +1102,9 @@ function runStitch(opts) {
     } else if (m.type === 'error') {
       toast('Stitching failed: ' + m.message, 5000); show('home');
     } else if (m.type === 'done') {
-      if (opts.autoFov) { fovLong = m.fov; store('fovLong', String(m.fov)); store('fovCalibrated', '1'); }
+      (opts.autoLenses || []).forEach(l => { if (m.fovs && m.fovs[l]) setFov(l, m.fovs[l], true); });
       try {
-        const item = await buildItem(session.id, m.W, m.H, m.data, m.fov, session.heading);
+        const item = await buildItem(session.id, m.W, m.H, m.data, m.fovs, session.heading);
         try { await DB.put(item); } catch (e) { toast('Could not save to the in-app gallery (storage full?). Use Save / Share.', 4000); }
         renderGallery();
         openViewer(item, true);
@@ -1372,17 +1480,22 @@ $('#btnDelete').onclick = async () => {
 };
 
 // Adjust
-const fovRange = $('#fovRange');
-function syncAdjust() { fovRange.value = fovLong; $('#fovVal').textContent = (+fovLong).toFixed(1) + '°'; $('#resSel').value = store('res') || '3072'; }
-fovRange.oninput = () => { $('#fovVal').textContent = (+fovRange.value).toFixed(1) + '°'; };
+function syncAdjust() {
+  const box = $('#fovBox'), ls = (session && session.lenses) || ['main'];
+  const R = { main: [50, 90], ultra: [80, 125], front: [50, 100] };
+  box.innerHTML = ls.map(l => `<label class="field">${LENS_NAME[l]} field of view: <b data-v="${l}">${(+fovs[l]).toFixed(1)}°</b>
+    <input type="range" data-lens="${l}" min="${R[l][0]}" max="${R[l][1]}" step="0.5" value="${fovs[l]}"></label>`).join('');
+  box.querySelectorAll('input').forEach(i => i.oninput = () => { box.querySelector(`[data-v=${i.dataset.lens}]`).textContent = (+i.value).toFixed(1) + '°'; });
+  $('#resSel').value = store('res') || '3072';
+}
 $('#btnAdjust').onclick = () => { syncAdjust(); $('#adjustModal').classList.add('on'); };
 $('#btnAdjustClose').onclick = () => $('#adjustModal').classList.remove('on');
 function restitch(auto) {
   if (!worker || !session) return;
   $('#adjustModal').classList.remove('on'); viewer.stop();
   const width = parseInt($('#resSel').value, 10); store('res', String(width));
-  if (!auto) { fovLong = parseFloat(fovRange.value); store('fovLong', String(fovLong)); store('fovCalibrated', '1'); }
-  runStitch({ fovLong, autoFov: auto, gain: $('#gainChk').checked, width });
+  if (!auto) $('#fovBox').querySelectorAll('input').forEach(i => setFov(i.dataset.lens, parseFloat(i.value), true));
+  runStitch({ fovs: Object.assign({}, fovs), autoLenses: auto ? ((session && session.lenses) || ['main']) : [], gain: $('#gainChk').checked, width });
 }
 $('#btnRestitch').onclick = () => restitch(false);
 $('#btnAuto').onclick = () => restitch(true);
@@ -1748,10 +1861,8 @@ document.addEventListener('visibilitychange', async () => {
   if (document.hidden && capturing && frames.length === 0) { stopStream(); show('home'); return; }
   // iOS stops the camera when you leave the app; restart it so the capture can continue
   if (!document.hidden && capturing && stream && stream.getVideoTracks().every(t => t.readyState === 'ended')) {
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 }, height: { ideal: 1440 } } });
-      video.srcObject = stream; await video.play();
-    } catch (e) { toast('Camera stopped. Tap Stitch to use the shots you have.', 4000); }
+    try { await openCamera(curCam); }
+    catch (e) { toast('Camera stopped. Tap Stitch to use the shots you have.', 4000); }
   }
 });
 
