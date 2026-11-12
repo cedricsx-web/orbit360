@@ -195,6 +195,12 @@
     <p id="camText"></p>
     <button id="btnCamSwitch" class="btn primary bigbtn"></button>
   </div>
+  <div id="floorSheet" class="sheet" style="display:none">
+    <h3 id="floorTitle"></h3>
+    <p id="floorText"></p>
+    <button id="btnFloorGo" class="btn primary bigbtn"></button>
+    <button id="btnFloorSkip" class="btn" style="width:100%;margin-top:8px"></button>
+  </div>
   <div id="rotateWarn">Please hold your phone upright (portrait).</div>
 </section>
 
@@ -547,6 +553,30 @@ function makeTargets(lensKey, onTripod) {
   return t.map(o => ({ ...o, dir: dirFrom(o.yaw * D2R, o.pitch * D2R), done: false, cam: onTripod && o.pitch < 0 ? 'front' : 'back' }));
 }
 const eligible = (t) => !t.done && (!tripod || (t.cam === 'front') === (curCam === 'front'));
+/* Floor patch: after the tripod shots, the tripod is removed and 1–2 photos of the floor are taken by hand,
+   pointing straight down over the spot. The stitcher fits them onto the floor and uses them to hide the tripod. */
+let floorStep = 0;
+const floorTarget = { yaw: 0, pitch: -90, dir: [0, 0, -1], done: false, floor: true };
+const floorCount = () => frames.filter(f => f.floor).length;
+function offerFloor() {
+  floorStep = 0;
+  const n = floorCount();
+  if (n >= 2) { finishCapture(); return; }
+  $('#floorTitle').textContent = n ? 'Floor photo taken' : 'Last step: the floor, without the tripod';
+  $('#floorText').textContent = n
+    ? 'For a cleaner floor, take one more from the OPPOSITE side of the spot, so your feet are somewhere else (optional).'
+    : 'Take the tripod away. Stand beside the spot where it was, hold the phone out over that spot at about the same height, camera pointing straight down. Keep your feet at the bottom of the screen.';
+  $('#btnFloorGo').textContent = n ? 'Take one more' : 'Take the floor photo';
+  $('#btnFloorSkip').textContent = n ? 'Stitch now' : 'Skip (keep the tripod in the picture)';
+  $('#floorSheet').style.display = 'block';
+  $('#hintText').textContent = n ? 'Floor photo taken' : 'Remove the tripod';
+}
+$('#btnFloorGo').onclick = async () => {
+  $('#floorSheet').style.display = 'none';
+  if (curCam === 'front') await switchCam(lens);
+  floorTarget.done = false; floorStep = 1;
+};
+$('#btnFloorSkip').onclick = () => { $('#floorSheet').style.display = 'none'; finishCapture(); };
 
 function camTan() {
   const vw = video.videoWidth || 3, vh = video.videoHeight || 4, L = Math.max(vw, vh);
@@ -610,8 +640,8 @@ async function startCapture() {
     const msg = (e && e.name === 'NotAllowedError') ? 'Camera access was refused. Allow camera access for this site (Settings › Safari › Camera) and try again.' : (e.message || String(e));
     $('#homeErr').textContent = msg; stopStream(); return;
   }
-  targets = []; frames = []; yaw0 = null; holdStart = 0; lastF = null; camPrompted = null;
-  $('#camSheet').style.display = 'none';
+  targets = []; frames = []; yaw0 = null; holdStart = 0; lastF = null; camPrompted = null; floorStep = 0;
+  $('#camSheet').style.display = 'none'; $('#floorSheet').style.display = 'none';
   updateCamUI();
   $('#startSheet').style.display = 'block';
   $('#hint').style.display = 'none';
@@ -646,7 +676,7 @@ function videoRect() {
 
 function updateCount() {
   const n = targets.filter(t => t.done).length;
-  $('#count').textContent = targets.length ? `${n} / ${targets.length}` : '';
+  $('#count').textContent = targets.length ? `${n} / ${targets.length}` + (floorCount() ? ` + floor ${floorCount()}` : '') : '';
   $('#btnUndo').disabled = frames.length === 0;
   $('#btnDone').disabled = frames.length < 2;
 }
@@ -699,7 +729,7 @@ function tick(now) {
   }
 
   const cx = vr.x + vr.w / 2, cy = vr.y + vr.h / 2;
-  const { t: best, a } = yaw0 === null ? { t: null, a: Infinity } : nearestTarget(f);
+  const { t: best, a } = yaw0 === null ? { t: null, a: Infinity } : floorStep ? { t: floorTarget, a: angleBetween(f, floorTarget.dir) } : nearestTarget(f);
 
   // reticle
   octx.lineWidth = 3;
@@ -708,7 +738,7 @@ function tick(now) {
 
   if (best) {
     const aDeg = a * R2D;
-    const aligned = aDeg < ALIGN_DEG, still = speed < MAX_SPEED;
+    const aligned = aDeg < (best.floor ? 8 : ALIGN_DEG), still = speed < MAX_SPEED;
     if (aligned && still) {
       if (!holdStart) holdStart = now;
       const prog = Math.min(1, (now - holdStart) / HOLD_MS);
@@ -727,6 +757,7 @@ function tick(now) {
       drawArrow(cx, cy, ang);
     }
     $('#hintText').textContent = hintFor(best, f, aligned, still);
+    if (best.floor) $('#hintText').textContent = aligned ? (still ? 'Hold…' : 'Hold still…') : 'Point the phone straight down over the spot where the tripod stood';
   } else if (yaw0 !== null && tripod && targets.some(t => !t.done)) promptSwitch();
   drawMinimap(f);
 }
@@ -802,12 +833,13 @@ function takeShot(target, R) {
   grab.width = w; grab.height = h;
   gctx.drawImage(video, 0, 0, w, h);
   const img = gctx.getImageData(0, 0, w, h);
-  frames.push({ w, h, data: img.data, R: R.slice(), target, lens: curCam });
+  frames.push({ w, h, data: img.data, R: R.slice(), target, lens: curCam, floor: !!target.floor });
   target.done = true;
   const fl = $('#flash'); fl.style.transition = 'none'; fl.style.opacity = '.55';
   requestAnimationFrame(() => { fl.style.transition = 'opacity .3s'; fl.style.opacity = '0'; });
   updateCount();
-  if (targets.every(t => t.done)) setTimeout(finishCapture, 250);
+  if (target.floor) { floorStep = 0; setTimeout(offerFloor, 300); return; }
+  if (targets.every(t => t.done)) setTimeout(() => { if (tripod) offerFloor(); else finishCapture(); }, 250);
 }
 
 $('#btnStart').onclick = () => {
@@ -821,7 +853,12 @@ $('#btnStart').onclick = () => {
   $('#startSheet').style.display = 'none';
   $('#hint').style.display = 'block';
 };
-$('#btnUndo').onclick = () => { const fr = frames.pop(); if (fr) fr.target.done = false; updateCount(); };
+$('#btnUndo').onclick = () => {
+  const fr = frames.pop(); if (!fr) return;
+  fr.target.done = false; updateCount();
+  $('#floorSheet').style.display = 'none'; floorStep = 0;
+  if (fr.floor) offerFloor();
+};
 $('#btnCancel').onclick = () => {
   if (frames.length > 3) { askConfirm('Discard this capture?', 'Discard').then(ok => { if (ok) { stopStream(); frames = []; show('home'); } }); return; }
   stopStream(); frames = []; show('home');
@@ -915,6 +952,138 @@ function workerMain() {
           wt);
       }
     }
+  }
+
+  /* A floor photo taken by hand: its pixels are laid on the floor plane (1 = tripod camera height below the centre)
+     and seen from where the phone was: fp = {k: phone height / tripod height, dx, dy: sideways offset (in tripod
+     heights), dyaw: small turn}. Your feet sit at the bottom of the phone's screen, so that part counts less. */
+  function rasterFloor(f, tx, ty, W, H, tabs, visit, aMax) {
+    const R = f.R, fp = f.fp || { k: 1, dx: 0, dy: 0, dyaw: 0 };
+    const cs = Math.cos(fp.dyaw), sn = Math.sin(fp.dyaw);
+    const r0 = R[0], r1 = R[1], r2 = R[2], r3 = R[3], r4 = R[4], r5 = R[5], r6 = R[6], r7 = R[7], r8 = R[8];
+    const { sinLat, cosLat, sinLon, cosLon } = tabs, fw = f.w, fh = f.h, data = f.data;
+    const j0 = Math.max(0, Math.floor(H * (1 - aMax / PI)));
+    for (let j = j0; j < H; j++) {
+      const sl = sinLat[j], cl = cosLat[j];
+      if (sl > -1e-3) continue;
+      const t = -1 / sl, row = j * W;
+      for (let i = 0; i < W; i++) {
+        const X = t * cl * sinLon[i] - fp.dx, Y = t * cl * cosLon[i] - fp.dy, Z = -fp.k;
+        const vx = X * cs - Y * sn, vy = X * sn + Y * cs, vz = Z;
+        const dz = r2 * vx + r5 * vy + r8 * vz;
+        if (dz >= -1e-6) continue;
+        const inv = -1 / dz;
+        const px = (r0 * vx + r3 * vy + r6 * vz) * inv / tx;
+        if (px <= -1 || px >= 1) continue;
+        const py = (r1 * vx + r4 * vy + r7 * vz) * inv / ty;
+        if (py <= -1 || py >= 1) continue;
+        const fe = Math.max(0, Math.min(1, (py + 0.55) / 0.65)), wt = fe * fe * (3 - 2 * fe) * (1 - px * px) * (1 - py * py);
+        if (wt <= 0) continue;
+        const u = (px + 1) * 0.5 * fw - 0.5, v = (1 - py) * 0.5 * fh - 0.5;
+        let x0 = Math.floor(u), y0 = Math.floor(v); const ax = u - x0, ay = v - y0;
+        let x1 = x0 + 1, y1 = y0 + 1;
+        if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0; if (x1 > fw - 1) x1 = fw - 1; if (y1 > fh - 1) y1 = fh - 1;
+        if (x0 > fw - 1) x0 = fw - 1; if (y0 > fh - 1) y0 = fh - 1;
+        const p00 = (y0 * fw + x0) * 4, p10 = (y0 * fw + x1) * 4, p01 = (y1 * fw + x0) * 4, p11 = (y1 * fw + x1) * 4;
+        const b00 = (1 - ax) * (1 - ay), b10 = ax * (1 - ay), b01 = (1 - ax) * ay, b11 = ax * ay;
+        visit(row + i,
+          data[p00] * b00 + data[p10] * b10 + data[p01] * b01 + data[p11] * b11,
+          data[p00 + 1] * b00 + data[p10 + 1] * b10 + data[p01 + 1] * b01 + data[p11 + 1] * b11,
+          data[p00 + 2] * b00 + data[p10 + 2] * b10 + data[p01 + 2] * b01 + data[p11 + 2] * b11, wt);
+      }
+    }
+  }
+  // Fits a floor photo to the ring of floor just around the tripod, seen in the other shots.
+  function alignFloor(main, mParams, mGains, ff, fpar, capDeg) {
+    const W = 512, H = 256, tabs = tables(W, H);
+    const acc = accumulate(main, mParams, mGains, W, H, tabs);
+    const rowAng = new Float32Array(H);
+    for (let j = 0; j < H; j++) rowAng[j] = 90 + (90 - (j + 0.5) / H * 180);   // degrees from straight down
+    const lo = Math.max(18, capDeg - 8), hi = capDeg + 16;   // just outside the tripod's legs
+    const pairs = (fp, step) => {
+      ff.fp = fp; const out = []; let c = 0;
+      rasterFloor(ff, fpar.tx, fpar.ty, W, H, tabs, (p, r, g, b, wt) => {
+        const a = rowAng[(p / W) | 0], q = p * 4, w = acc[q + 3];
+        if (a < lo || a > hi || w < 1e-6 || wt < 0.05) return;
+        if (step > 1 && (c++ % step)) return;
+        out.push(p, r, g, b, wt);
+      }, hi * PI / 180);
+      return out;
+    };
+    // Robust match: both pictures normalised (brightness may differ), then the average difference over the
+    // best-matching 75% of pixels, so a stray tripod leg (in the other shots) or your feet (in this one) are ignored.
+    const score = (fp, step) => {
+      const o = pairs(fp, step), n = o.length / 5;
+      if (n < 300) return { s: Infinity, n };
+      const lf = new Float32Array(n), lm = new Float32Array(n);
+      let mf = 0, mm = 0;
+      for (let i = 0, k = 0; i < o.length; i += 5, k++) {
+        const q = o[i] * 4, w = acc[q + 3];
+        lf[k] = 0.299 * o[i + 1] + 0.587 * o[i + 2] + 0.114 * o[i + 3];
+        lm[k] = (0.299 * acc[q] + 0.587 * acc[q + 1] + 0.114 * acc[q + 2]) / w;
+        mf += lf[k]; mm += lm[k];
+      }
+      mf /= n; mm /= n; let vf = 0, vm = 0;
+      for (let k = 0; k < n; k++) { vf += (lf[k] - mf) ** 2; vm += (lm[k] - mm) ** 2; }
+      vf = Math.sqrt(vf / n) || 1; vm = Math.sqrt(vm / n) || 1;
+      const e = new Float32Array(n);
+      for (let k = 0; k < n; k++) e[k] = Math.abs((lf[k] - mf) / vf - (lm[k] - mm) / vm);
+      e.sort(); const m = Math.floor(n * 0.75); let t = 0; for (let k = 0; k < m; k++) t += e[k];
+      return { s: t / m, n, tex: vm };
+    };
+    const range = (a, b, st) => { const r = []; for (let v = a; v <= b + 1e-9; v += st) r.push(v); return r; };
+    let fp = { k: 1, dx: 0, dy: 0, dyaw: 0 }, best = score(fp, 1);
+    // 1) coarse search over height and sideways offset, 2) fine-tune everything (including a small turn)
+    for (const k of range(0.6, 1.4, 0.1)) for (const dx of range(-0.3, 0.3, 0.075)) for (const dy of range(-0.3, 0.3, 0.075)) {
+      const c = { k, dx, dy, dyaw: 0 }, sc = score(c, 3); if (sc.s < best.s) { best = sc; fp = c; }
+    }
+    best = score(fp, 1);
+    const tryAxis = (key, vals) => { for (const v of vals) { const c = Object.assign({}, fp, { [key]: v }), sc = score(c, 1); if (sc.s < best.s) { best = sc; fp = c; } } };
+    for (let round = 0; round < 3; round++) {
+      const f = [1, 0.4, 0.15][round];
+      tryAxis('dyaw', range(fp.dyaw - 0.14 * f, fp.dyaw + 0.14 * f, 0.0175 * f));
+      tryAxis('k', range(fp.k - 0.1 * f, fp.k + 0.1 * f, 0.02 * f).filter(v => v > 0.3));
+      tryAxis('dx', range(fp.dx - 0.08 * f, fp.dx + 0.08 * f, 0.016 * f));
+      tryAxis('dy', range(fp.dy - 0.08 * f, fp.dy + 0.08 * f, 0.016 * f));
+    }
+    // a plain, untextured floor gives nothing to line up on: keep the phone's own reading
+    if (!isFinite(best.s) || best.s > 0.45 || (best.tex || 0) < 4) fp = { k: 1, dx: 0, dy: 0, dyaw: 0 };
+    // colour match with the surrounding floor
+    const o = pairs(fp), sm = [0, 0, 0], sf = [0, 0, 0];
+    for (let i = 0; i < o.length; i += 5) { const q = o[i] * 4, w = acc[q + 3], wt = o[i + 4];
+      for (let c = 0; c < 3; c++) { sm[c] += acc[q + c] / w * wt; sf[c] += o[i + 1 + c] * wt; } }
+    const gain = [0, 1, 2].map(c => (sf[c] > 1 && sm[c] > 1) ? Math.min(2, Math.max(0.5, sm[c] / sf[c])) : 1);
+    ff.fp = fp;
+    return { fp, gain, score: best.s };
+  }
+
+  // Like accumulate, but floor photos replace the other shots right under the camera (where the tripod is).
+  function accumulateAll(frames, params, gains, W, H, tabs, capDeg, onFrame) {
+    const fl = []; frames.forEach((f, i) => { if (f.floor && f.fp) fl.push(i); });
+    if (!fl.length) return accumulate(frames.filter(f => !f.floor), params.filter((p, i) => !frames[i].floor), gains.filter((g, i) => !frames[i].floor), W, H, tabs, onFrame);
+    const capRow = new Float32Array(H);
+    for (let j = 0; j < H; j++) { const a = 90 + (90 - (j + 0.5) / H * 180), x = Math.max(0, Math.min(1, (a - (capDeg - 5)) / 10)); capRow[j] = 1 - x * x * (3 - 2 * x); }
+    const acc = new Float32Array(W * H * 4), fw = new Float32Array(W * H);
+    let done = 0;
+    for (const i of fl) {
+      const g = gains[i];
+      rasterFloor(frames[i], params[i].tx, params[i].ty, W, H, tabs, (p, r, gg, b, wt) => {
+        const w = wt * capRow[(p / W) | 0]; if (w <= 0) return;
+        const q = p * 4; acc[q] += r * g[0] * w; acc[q + 1] += gg * g[1] * w; acc[q + 2] += b * g[2] * w; acc[q + 3] += w; fw[p] += w;
+      }, (capDeg + 6) * PI / 180);
+      if (onFrame) onFrame(++done, frames.length);
+    }
+    frames.forEach((f, k) => {
+      if (f.floor) return;
+      const g = gains[k];
+      rasterize(f, params[k].tx, params[k].ty, W, H, tabs, (p, r, gg, b, wt) => {
+        const c = capRow[(p / W) | 0]; if (c > 0) wt *= 1 - c * Math.min(1, fw[p] * 3);
+        if (wt <= 0) return;
+        const q = p * 4; acc[q] += r * g[0] * wt; acc[q + 1] += gg * g[1] * wt; acc[q + 2] += b * g[2] * wt; acc[q + 3] += wt;
+      });
+      if (onFrame) onFrame(++done, frames.length);
+    });
+    return acc;
   }
 
   function accumulate(frames, params, gains, W, H, tabs, onFrame) {
@@ -1050,13 +1219,22 @@ function workerMain() {
 
   function stitch(frames, opts, progress) {
     if (!frames.length) throw new Error('No photos to stitch.');
+    const main = frames.filter(f => !f.floor), floors = frames.filter(f => f.floor);
+    if (!main.length) throw new Error('No photos to stitch.');
     let fovs = Object.assign({ main: 70, ultra: 104, front: 74 }, opts.fovs);
-    if (opts.autoLenses && opts.autoLenses.length && frames.length >= 4) { progress('Measuring your lens…', 0); fovs = calibrateFov(frames, fovs, opts.autoLenses, progress); }
-    const params = frames.map(f => frameParams(f, fovs));
+    if (opts.autoLenses && opts.autoLenses.length && main.length >= 4) { progress('Measuring your lens…', 0); fovs = calibrateFov(main, fovs, opts.autoLenses, progress); }
+    const params = frames.map(f => frameParams(f, fovs)), mParams = main.map(f => frameParams(f, fovs));
     progress('Balancing brightness…', 0);
-    const gains = (opts.gain && frames.length > 1) ? estimateGains(frames, params) : frames.map(() => [1, 1, 1]);
+    const mGains = (opts.gain && main.length > 1) ? estimateGains(main, mParams) : main.map(() => [1, 1, 1]);
+    const gains = frames.map(f => f.floor ? [1, 1, 1] : mGains[main.indexOf(f)]);
+    const cap = opts.floorCap || 28, floorInfo = [];
+    floors.forEach((ff, n) => {
+      progress('Lining up the floor…', n / floors.length);
+      const r = alignFloor(main, mParams, mGains, ff, frameParams(ff, fovs), cap);
+      gains[frames.indexOf(ff)] = r.gain; floorInfo.push(r);
+    });
     const W = opts.width, H = W / 2, tabs = tables(W, H);
-    const acc = accumulate(frames, params, gains, W, H, tabs, (k, n) => progress('Blending photos…', k / n));
+    const acc = accumulateAll(frames, params, gains, W, H, tabs, cap, (k, n) => progress('Blending photos…', k / n));
     progress('Filling gaps…', 1);
     for (let p = 0; p < W * H; p++) {
       const q = p * 4, w = acc[q + 3];
@@ -1065,11 +1243,11 @@ function workerMain() {
     fillHoles(acc, W, H);
     const out = new Uint8ClampedArray(W * H * 4);
     for (let p = 0; p < W * H * 4; p += 4) { out[p] = acc[p]; out[p + 1] = acc[p + 1]; out[p + 2] = acc[p + 2]; out[p + 3] = 255; }
-    return { W, H, fovs, data: out };
+    return { W, H, fovs, floorInfo, data: out };
   }
 
   // exposed for testing
-  self.__core = { stitch, rasterize, tables, frameParams, estimateGains, calibrateFov };
+  self.__core = { stitch, rasterize, rasterFloor, alignFloor, accumulate, tables, frameParams, estimateGains, calibrateFov };
 }
 
 let worker = null, session = null; // session = {id, hasFrames}
@@ -1081,14 +1259,15 @@ function newWorker() {
 
 function finishCapture() {
   if (frames.length < 2) return;
-  const shots = frames.map(f => ({ w: f.w, h: f.h, data: f.data, R: f.R, lens: f.lens || 'main' }));
-  const lenses = [...new Set(shots.map(s => s.lens))];
+  const shots = frames.map(f => ({ w: f.w, h: f.h, data: f.data, R: f.R, lens: f.lens || 'main', floor: !!f.floor }));
+  const lenses = [...new Set(shots.filter(s => !s.floor).map(s => s.lens))];
+  const hasFloor = shots.some(s => s.floor);
   stopStream();
   frames = [];
   newWorker();
   worker.postMessage({ type: 'frames', frames: shots }, shots.map(s => s.data.buffer));
-  session = { id: Date.now(), hasFrames: true, heading: captureHeading, lenses };
-  runStitch({ fovs: Object.assign({}, fovs), autoLenses: lenses.filter(l => !isCal(l)), gain: true, width: parseInt(store('res') || '3072', 10) });
+  session = { id: Date.now(), hasFrames: true, heading: captureHeading, lenses, hasFloor, floorCap: 28 };
+  runStitch({ fovs: Object.assign({}, fovs), autoLenses: lenses.filter(l => !isCal(l)), gain: true, width: parseInt(store('res') || '3072', 10), floorCap: 28 });
 }
 
 function runStitch(opts) {
@@ -1485,7 +1664,10 @@ function syncAdjust() {
   const R = { main: [50, 90], ultra: [80, 125], front: [50, 100] };
   box.innerHTML = ls.map(l => `<label class="field">${LENS_NAME[l]} field of view: <b data-v="${l}">${(+fovs[l]).toFixed(1)}°</b>
     <input type="range" data-lens="${l}" min="${R[l][0]}" max="${R[l][1]}" step="0.5" value="${fovs[l]}"></label>`).join('');
-  box.querySelectorAll('input').forEach(i => i.oninput = () => { box.querySelector(`[data-v=${i.dataset.lens}]`).textContent = (+i.value).toFixed(1) + '°'; });
+  if (session && session.hasFloor) box.innerHTML += `<label class="field">Floor patch size (hides the tripod): <b id="capV">${session.floorCap}°</b>
+    <input type="range" id="capRange" min="12" max="45" step="1" value="${session.floorCap}"></label>`;
+  box.querySelectorAll('input[data-lens]').forEach(i => i.oninput = () => { box.querySelector(`[data-v=${i.dataset.lens}]`).textContent = (+i.value).toFixed(1) + '°'; });
+  const cr = $('#capRange'); if (cr) cr.oninput = () => { $('#capV').textContent = cr.value + '°'; };
   $('#resSel').value = store('res') || '3072';
 }
 $('#btnAdjust').onclick = () => { syncAdjust(); $('#adjustModal').classList.add('on'); };
@@ -1494,8 +1676,9 @@ function restitch(auto) {
   if (!worker || !session) return;
   $('#adjustModal').classList.remove('on'); viewer.stop();
   const width = parseInt($('#resSel').value, 10); store('res', String(width));
-  if (!auto) $('#fovBox').querySelectorAll('input').forEach(i => setFov(i.dataset.lens, parseFloat(i.value), true));
-  runStitch({ fovs: Object.assign({}, fovs), autoLenses: auto ? ((session && session.lenses) || ['main']) : [], gain: $('#gainChk').checked, width });
+  if (!auto) $('#fovBox').querySelectorAll('input[data-lens]').forEach(i => setFov(i.dataset.lens, parseFloat(i.value), true));
+  const cr = $('#capRange'); if (cr && session) session.floorCap = +cr.value;
+  runStitch({ fovs: Object.assign({}, fovs), autoLenses: auto ? ((session && session.lenses) || ['main']) : [], gain: $('#gainChk').checked, width, floorCap: (session && session.floorCap) || 28 });
 }
 $('#btnRestitch').onclick = () => restitch(false);
 $('#btnAuto').onclick = () => restitch(true);
