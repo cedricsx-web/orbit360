@@ -408,8 +408,13 @@ const $ = (s) => document.querySelector(s);
 const D2R = Math.PI / 180, R2D = 180 / Math.PI;
 const FRAME_LONG = 1440;         // long side (px) of each stored shot (the worker makes small copies for measuring)
 const ALIGN_DEG = 3.5;           // how close to a dot before capturing
-const HOLD_MS = 380;             // how long to hold still
-const MAX_SPEED = 9;             // deg/s considered "still"
+/* Sharp shots: the phone must be really still (both its slow turning and the tiny shake measured by the
+   gyroscope), it then waits a moment for vibrations to die down, and finally watches the camera for a short
+   burst and keeps the sharpest frame of the burst. */
+const STILL_TURN = 3;            // deg/s: slow drift allowed
+const STILL_SHAKE = 2.5;         // deg/s: gyroscope shake allowed
+const SETTLE_MS = { hand: 500, tripod: 800 };   // wait after the phone becomes still
+const BURST_MS = 450;            // then look at the camera this long and keep the sharpest frame
 
 function store(key, val) { try { if (val === undefined) return localStorage.getItem(key); localStorage.setItem(key, val); } catch (e) { return null; } }
 
@@ -450,6 +455,9 @@ window.addEventListener('deviceorientation', (e) => {
 }, true);
 
 async function ensureMotion() {
+  if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+    try { await DeviceMotionEvent.requestPermission(); } catch (e) {}
+  }
   if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
     const res = await DeviceOrientationEvent.requestPermission();
     if (res !== 'granted') throw new Error('Motion & orientation access was refused.\nOrbit 360 needs it to know where the camera points. Close the app, open it again and tap "Allow".');
@@ -541,6 +549,36 @@ const mm = $('#minimap'), mctx = mm.getContext('2d');
 const grab = document.createElement('canvas'), gctx = grab.getContext('2d', { willReadFrequently: true });
 let stream = null, targets = [], frames = [], yaw0 = null, capturing = false, rafId = 0, captureHeading = null;
 let holdStart = 0, lastF = null, lastT = 0, speed = 0;
+// gyroscope shake (deg/s), the largest value of the last ~150 ms
+let shake = 0, shakeT = 0, hasGyro = false;
+window.addEventListener('devicemotion', (e) => {
+  const r = e.rotationRate; if (!r || r.alpha == null) return;
+  hasGyro = true;
+  const v = Math.hypot(r.alpha || 0, r.beta || 0, r.gamma || 0), now = performance.now();
+  if (v > shake || now - shakeT > 150) { shake = v; shakeT = now; }
+});
+// sharpness of what the camera sees now: contrast of fine detail in the middle of the picture
+const sharpCv = document.createElement('canvas'), sharpCtx = sharpCv.getContext('2d', { willReadFrequently: true });
+function sharpness() {
+  const vw = video.videoWidth, vh = video.videoHeight; if (!vw) return 0;
+  const W = 200, H = 200, cw = Math.min(vw, vh) * 0.6;
+  sharpCv.width = W; sharpCv.height = H;
+  sharpCtx.drawImage(video, (vw - cw) / 2, (vh - cw) / 2, cw, cw, 0, 0, W, H);
+  const d = sharpCtx.getImageData(0, 0, W, H).data, g = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) g[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+  let s = 0, s2 = 0, n = 0;
+  for (let y = 1; y < H - 1; y++) for (let x = 1; x < W - 1; x++) {
+    const i = y * W + x, l = 4 * g[i] - g[i - 1] - g[i + 1] - g[i - W] - g[i + W];
+    s += l; s2 += l * l; n++;
+  }
+  return s2 / n - (s / n) ** 2;
+}
+let burst = null, vfcFlag = true;
+function watchFrames() {             // new camera frames (where the browser can tell us)
+  if (!video.requestVideoFrameCallback) return;
+  const cb = () => { vfcFlag = true; if (capturing) video.requestVideoFrameCallback(cb); };
+  video.requestVideoFrameCallback(cb);
+}
 /* Cameras: main (1×), ultra-wide (0.5×) and front. Each has its own field of view (long side, degrees),
    measured automatically the first time it's used. The front camera looks out of the screen side, so its
    shots are stored as if a back camera were turned around (R × FLIP): the stitcher treats all shots alike. */
@@ -637,7 +675,8 @@ async function openCamera(kind) {
   video.srcObject = stream;
   try { await video.play(); } catch (e) {}
   curCam = (kind === 'ultra' && !camIds.ultra) ? 'main' : kind;
-  lastF = null; holdStart = 0; speed = 0;
+  if (!video.videoWidth) await new Promise(r => { video.onloadedmetadata = () => r(); setTimeout(r, 1500); });
+  lastF = null; holdStart = 0; speed = 0; burst = null; watchFrames();
   updateCamUI();
 }
 async function switchCam(kind) {
@@ -658,7 +697,8 @@ function updateCamUI() {
   $('#planText').textContent = `${t.length} shots` + (parts.length > 1 ? ': ' + parts.join(', ') + '.' : '.') +
     (tripod === 'ceil' ? ' The front camera photographs the ceiling while you tilt the phone down.'
      : tripod === 'floor' ? ' The front camera photographs the floor while you tilt the phone up.' : '') +
-    (tripod ? ' At the end, remove the tripod for one hand-held floor photo.' : '');
+    (tripod ? ' At the end, remove the tripod for one hand-held floor photo.' : '') +
+    (video.videoWidth ? ` Camera: ${video.videoWidth}×${video.videoHeight}` + (Math.max(video.videoWidth, video.videoHeight) < 1280 ? ' (low: shots will be soft)' : '') + '.' : '');
 }
 
 async function startCapture() {
@@ -773,14 +813,27 @@ function tick(now) {
 
   if (best) {
     const aDeg = a * R2D;
-    const aligned = aDeg < (best.floor ? 8 : ALIGN_DEG), still = speed < MAX_SPEED;
-    if (aligned && still) {
+    const shakeNow = hasGyro && now - shakeT < 400 ? shake : 0;
+    const aligned = aDeg < (best.floor ? 8 : ALIGN_DEG), still = speed < STILL_TURN && shakeNow < STILL_SHAKE;
+    const settle = tripod ? SETTLE_MS.tripod : SETTLE_MS.hand;
+    if (burst && (burst.target !== best || !aligned || speed > STILL_TURN * 2 || shakeNow > STILL_SHAKE * 2)) { burst = null; holdStart = 0; }
+    if (burst) {
+      // look at each new camera frame, keep the sharpest
+      if (vfcFlag || !video.requestVideoFrameCallback) {
+        vfcFlag = false;
+        if (still) { const sh = sharpness(); if (sh > burst.sharp) { burst.sharp = sh; burst.img = grabFrame(); burst.R = R.slice(); } }
+      }
+      octx.strokeStyle = '#4fd1c5'; octx.lineWidth = 6;
+      octx.beginPath(); octx.arc(cx, cy, 24, 0, Math.PI * 2); octx.stroke();
+      if (now - burst.start >= BURST_MS && burst.img) { takeShot(best, burst.R, burst.img); burst = null; holdStart = 0; }
+    } else if (aligned && still) {
       if (!holdStart) holdStart = now;
-      const prog = Math.min(1, (now - holdStart) / HOLD_MS);
+      const prog = Math.min(1, (now - holdStart) / settle);
       octx.strokeStyle = '#4fd1c5'; octx.lineWidth = 6;
       octx.beginPath(); octx.arc(cx, cy, 24, -Math.PI / 2, -Math.PI / 2 + prog * Math.PI * 2); octx.stroke();
-      if (prog >= 1) { takeShot(best, R); holdStart = 0; }
+      if (prog >= 1) burst = { target: best, start: now, sharp: -1, img: null, R: null };
     } else holdStart = 0;
+    best._shaky = aligned && !still;
 
     // arrow toward target when it's not close
     const p = project(best.dir);
@@ -830,7 +883,8 @@ document.querySelectorAll('.lensbtn').forEach(b => b.onclick = async () => {
 $('#tripodSel').onchange = (e) => { tripod = e.target.value; store('tripod', tripod || '0'); updateCamUI(); };
 
 function hintFor(t, f, aligned, still) {
-  if (aligned && !still) return 'Hold still…';
+  if (burst) return 'Taking the sharpest shot…';
+  if (aligned && !still) return tripod ? 'Let go of the phone: waiting for the shake to stop…' : 'Hold still… the phone is still moving a little';
   if (aligned) return 'Hold…';
   if (curCam === 'front') {
     if (t.pitch === -90) return 'Point the phone straight UP: the front camera sees the floor';
@@ -873,13 +927,17 @@ function drawMinimap(f) {
   }
 }
 
-function takeShot(target, R) {
+function grabFrame() {
   const vw = video.videoWidth, vh = video.videoHeight;
   const s = Math.min(1, FRAME_LONG / Math.max(vw, vh));
   const w = Math.round(vw * s), h = Math.round(vh * s);
   grab.width = w; grab.height = h;
   gctx.drawImage(video, 0, 0, w, h);
-  const img = gctx.getImageData(0, 0, w, h);
+  return gctx.getImageData(0, 0, w, h);
+}
+function takeShot(target, R, img) {
+  img = img || grabFrame();
+  const w = img.width, h = img.height;
   frames.push({ w, h, data: img.data, R: R.slice(), target, lens: curCam, floor: !!target.floor });
   target.done = true;
   const fl = $('#flash'); fl.style.transition = 'none'; fl.style.opacity = '.55';
