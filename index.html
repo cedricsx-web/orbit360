@@ -193,6 +193,7 @@
         <option value="floor">Yes – front camera does the floor</option>
       </select>
     </label>
+    <label class="chk" id="downMainWrap" style="margin:6px 0"><input id="downMainChk" type="checkbox"> Downward shots with the main camera 1× (keeps tripod feet out)</label>
     <p id="planText" style="font-size:13px;margin:0 0 12px"></p>
     <button id="btnStart" class="btn primary bigbtn">Start capturing</button>
   </div>
@@ -268,16 +269,24 @@
 <div id="adjustModal" class="modal">
   <div class="sheet">
     <h3>Adjust stitching</h3>
-    <p>If straight lines are doubled or bent at the seams, try a different lens field of view and re-stitch.</p>
-    <div id="fovBox"></div>
+    <p>Sharpness: keep “Fine alignment” on, choose “Sharp” blending and a higher resolution. If straight lines are bent at the seams, try a different field of view.</p>
     <label class="field">Resolution
       <select id="resSel">
         <option value="2048">Standard: 2048 × 1024 (fast)</option>
-        <option value="3072" selected>High: 3072 × 1536</option>
-        <option value="4096">Max: 4096 × 2048 (uses a lot of memory)</option>
+        <option value="3072">High: 3072 × 1536</option>
+        <option value="4096">Very high: 4096 × 2048 (recommended)</option>
+        <option value="5760">Ultra: 5760 × 2880 (sharpest, slower)</option>
       </select>
     </label>
+    <label class="field">Blending between shots
+      <select id="blendSel">
+        <option value="sharp">Sharp: each spot from the shot that sees it best</option>
+        <option value="soft">Soft: smoother joins, a little blurrier</option>
+      </select>
+    </label>
+    <label class="chk"><input id="alignChk" type="checkbox" checked> Fine alignment (removes doubled, blurry edges)</label>
     <label class="chk"><input id="gainChk" type="checkbox" checked> Even out brightness between shots</label>
+    <div id="fovBox"></div>
     <div class="row">
       <button id="btnAuto" class="btn">Auto-detect lens</button>
       <button id="btnRestitch" class="btn primary">Re-stitch</button>
@@ -397,7 +406,7 @@
 
 const $ = (s) => document.querySelector(s);
 const D2R = Math.PI / 180, R2D = 180 / Math.PI;
-const FRAME_LONG = 960;          // long side (px) of each stored shot
+const FRAME_LONG = 1440;         // long side (px) of each stored shot (the worker makes small copies for measuring)
 const ALIGN_DEG = 3.5;           // how close to a dot before capturing
 const HOLD_MS = 380;             // how long to hold still
 const MAX_SPEED = 9;             // deg/s considered "still"
@@ -547,21 +556,34 @@ let lens = store('lens') === 'ultra' ? 'ultra' : 'main';
 // tripod: '' (hand-held) | 'floor' (front camera shoots the floor) | 'ceil' (front camera shoots the ceiling)
 let tripod = ({ '1': 'floor', floor: 'floor', ceil: 'ceil' })[store('tripod')] || '';
 
-function makeTargets(lensKey, onTripod) {
-  const fov = fovs[lensKey] || 70, tl = Math.tan(fov * D2R / 2);
-  const short = 2 * Math.atan(tl * 0.75) * R2D;               // the narrow side of the picture (portrait: width)
-  const n0 = Math.max(6, Math.ceil(360 / (short * 0.55)));    // shots around the horizon
-  const n45 = Math.max(4, Math.ceil(n0 * 0.66));               // shots in the rows tilted 45° up / down
-  const poles = fov / 2 + 45 < 96;                             // a wide lens covers straight up/down from the 45° rows
-  const t = [];
-  for (let i = 0; i < n0; i++) t.push({ yaw: i * 360 / n0, pitch: 0 });
-  for (let i = 0; i < n45; i++) t.push({ yaw: (i + 0.5) * 360 / n45, pitch: 45 });
-  for (let i = 0; i < n45; i++) t.push({ yaw: i * 360 / n45, pitch: -45 });
-  if (poles) { t.push({ yaw: 0, pitch: 90 }); t.push({ yaw: 0, pitch: -90 }); }
-  const front = (o) => (onTripod === 'floor' && o.pitch < 0) || (onTripod === 'ceil' && o.pitch > 0);
-  return t.map(o => ({ ...o, dir: dirFrom(o.yaw * D2R, o.pitch * D2R), done: false, cam: front(o) ? 'front' : 'back' }));
+/* The capture plan. Each shot says which camera takes it (t.cam: 'main' | 'ultra' | 'front').
+   - lensKey: the back lens for the horizon (main 1× or ultra-wide 0.5×)
+   - onTripod: '' | 'floor' (front camera shoots the floor) | 'ceil' (front camera shoots the ceiling)
+   - downMain: with the ultra-wide, take the downward shots with the main 1× camera, which sees less
+     and so keeps the tripod legs out of the picture. */
+function makeTargets(lensKey, onTripod, downMain) {
+  const geo = (key) => { const fov = fovs[key] || 70, tl = Math.tan(fov * D2R / 2);
+    const short = 2 * Math.atan(tl * 0.75) * R2D, n0 = Math.max(6, Math.ceil(360 / (short * 0.55)));
+    return { fov, n0, n45: Math.max(4, Math.ceil(n0 * 0.66)) }; };
+  const camFor = (pitch) => {
+    if ((onTripod === 'floor' && pitch < 0) || (onTripod === 'ceil' && pitch > 0)) return 'front';
+    if (lensKey === 'ultra' && downMain && pitch < 0) return 'main';
+    return lensKey;
+  };
+  const t = [], g0 = geo(lensKey), gu = geo(camFor(45)), gd = geo(camFor(-45));
+  for (let i = 0; i < g0.n0; i++) t.push({ yaw: i * 360 / g0.n0, pitch: 0 });
+  for (let i = 0; i < gu.n45; i++) t.push({ yaw: (i + 0.5) * 360 / gu.n45, pitch: 45 });
+  for (let i = 0; i < gd.n45; i++) t.push({ yaw: i * 360 / gd.n45, pitch: -45 });
+  if (gu.fov / 2 + 45 < 96) t.push({ yaw: 0, pitch: 90 });
+  // straight down: on a tripod that would only show the tripod, so the hand-held floor photo does it instead
+  if (gd.fov / 2 + 45 < 96 && !onTripod) t.push({ yaw: 0, pitch: -90 });
+  return t.map(o => ({ ...o, dir: dirFrom(o.yaw * D2R, o.pitch * D2R), done: false, cam: camFor(o.pitch) }));
 }
-const eligible = (t) => !t.done && (!tripod || (t.cam === 'front') === (curCam === 'front'));
+// with more than one camera in the plan, each shot waits for its own camera
+const multiCam = () => new Set(targets.map(t => t.cam)).size > 1;
+const eligible = (t) => !t.done && (!multiCam() || t.cam === curCam);
+let downMain = store('downMain') !== '0';
+const effLens = () => (lens === 'ultra' && camIds.ultra) ? 'ultra' : 'main';   // ultra-wide only if this iPhone offers it
 /* Floor patch: after the tripod shots, the tripod is removed and 1–2 photos of the floor are taken by hand,
    pointing straight down over the spot. The stitcher fits them onto the floor and uses them to hide the tripod. */
 let floorStep = 0;
@@ -629,11 +651,14 @@ function updateCamUI() {
   document.querySelectorAll('.lensbtn').forEach(b => b.classList.toggle('on', b.dataset.lens === lens));
   $('#lensUltra').style.display = camIds.ultra ? '' : 'none';
   $('#tripodSel').value = tripod;
-  const t = makeTargets(lens, tripod), nf = t.filter(x => x.cam === 'front').length, poles = t.some(x => x.pitch === 90);
-  $('#planText').textContent = `${t.length} shots.` +
-    (tripod === 'ceil' ? (poles ? ' Tilt the phone down to 45° and straight down; the front camera then photographs the ceiling.' : ` Tilt down to 45° only: ${nf} ceiling shots are taken with the front camera.`)
-     : tripod === 'floor' ? (poles ? ' Tilt the phone up to 45° and straight up; the front camera then photographs the floor.' : ` Tilt up to 45° only: ${nf} floor shots are taken with the front camera.`)
-     : (poles ? ' Includes straight up and straight down.' : ' No need to point straight up or down.'));
+  $('#downMainWrap').style.display = (lens === 'ultra' && camIds.ultra && tripod !== 'floor') ? '' : 'none';
+  $('#downMainChk').checked = downMain;
+  const t = makeTargets(effLens(), tripod, downMain), cnt = (c) => t.filter(x => x.cam === c).length;
+  const parts = [['ultra', 'ultra-wide 0.5×'], ['main', 'main 1×'], ['front', 'front camera']].filter(([c]) => cnt(c)).map(([c, n]) => `${cnt(c)} with the ${n}`);
+  $('#planText').textContent = `${t.length} shots` + (parts.length > 1 ? ': ' + parts.join(', ') + '.' : '.') +
+    (tripod === 'ceil' ? ' The front camera photographs the ceiling while you tilt the phone down.'
+     : tripod === 'floor' ? ' The front camera photographs the floor while you tilt the phone up.' : '') +
+    (tripod ? ' At the end, remove the tripod for one hand-held floor photo.' : '');
 }
 
 async function startCapture() {
@@ -768,25 +793,35 @@ function tick(now) {
     }
     $('#hintText').textContent = hintFor(best, f, aligned, still);
     if (best.floor) $('#hintText').textContent = aligned ? (still ? 'Hold…' : 'Hold still…') : 'Point the phone straight down over the spot where the tripod stood';
-  } else if (yaw0 !== null && tripod && targets.some(t => !t.done)) promptSwitch();
+  } else if (yaw0 !== null && multiCam() && targets.some(t => !t.done)) promptSwitch();
   drawMinimap(f);
 }
 
+let nextCam = null;
 function promptSwitch() {
-  const toFront = curCam !== 'front';
-  if (camPrompted === curCam || camBusy) return;
+  const left = targets.filter(t => !t.done);
+  if (!left.length || camBusy || camPrompted === curCam) return;
+  // back lens first, then the 1× camera, then the front camera: as few switches as possible
+  nextCam = [lens, 'main', 'ultra', 'front'].find(c => c !== curCam && left.some(t => t.cam === c)) || left[0].cam;
+  if (nextCam === curCam) return;
   camPrompted = curCam;
   const ceil = tripod === 'ceil';
-  $('#camTitle').textContent = toFront ? (ceil ? 'Now the ceiling' : 'Now the floor') : 'Back to the main camera';
-  $('#camText').textContent = toFront
-    ? (ceil ? 'Switch to the front camera. Then tilt the phone DOWN to each dot: the front camera, on the screen side, photographs the ceiling.'
-            : 'Switch to the front camera. Then tilt the phone UP to each dot: the front camera, on the screen side, photographs the floor.')
-    : 'A few shots are still missing for the back camera.';
-  $('#btnCamSwitch').textContent = toFront ? '⟲ Switch to the front camera' : '⟲ Switch to the back camera';
+  const T = {
+    front: [ceil ? 'Now the ceiling' : 'Now the floor',
+      ceil ? 'Switch to the front camera. Then tilt the phone DOWN to each dot: the front camera, on the screen side, photographs the ceiling.'
+           : 'Switch to the front camera. Then tilt the phone UP to each dot: the front camera, on the screen side, photographs the floor.',
+      '⟲ Switch to the front camera'],
+    main: curCam === 'ultra'
+      ? ['Now the downward shots', 'Switching to the main camera (1×). It sees less, so the tripod legs stay out of the picture. Tilt down to each dot.', '⟲ Switch to the main camera (1×)']
+      : ['Main camera (1×)', 'A few shots are still missing for the main camera.', '⟲ Switch to the main camera (1×)'],
+    ultra: ['Ultra-wide (0.5×)', 'A few shots are still missing for the ultra-wide camera.', '⟲ Switch to the ultra-wide (0.5×)']
+  }[nextCam];
+  $('#camTitle').textContent = T[0]; $('#camText').textContent = T[1]; $('#btnCamSwitch').textContent = T[2];
   $('#camSheet').style.display = 'block';
-  $('#hintText').textContent = toFront ? 'Switch to the front camera' : 'Switch to the back camera';
+  $('#hintText').textContent = T[2].replace('⟲ ', '');
 }
-$('#btnCamSwitch').onclick = async () => { $('#camSheet').style.display = 'none'; await switchCam(curCam === 'front' ? lens : 'front'); camPrompted = null; };
+$('#btnCamSwitch').onclick = async () => { $('#camSheet').style.display = 'none'; await switchCam(nextCam || (curCam === 'front' ? lens : 'front')); camPrompted = null; };
+$('#downMainChk').onchange = (e) => { downMain = e.target.checked; store('downMain', downMain ? '1' : '0'); updateCamUI(); };
 $('#btnCam').onclick = async () => { $('#camSheet').style.display = 'none'; await switchCam(curCam === 'front' ? lens : 'front'); camPrompted = null; };
 document.querySelectorAll('.lensbtn').forEach(b => b.onclick = async () => {
   lens = b.dataset.lens; store('lens', lens); updateCamUI();
@@ -861,7 +896,7 @@ $('#btnStart').onclick = () => {
   if (Math.abs(pitchOf(f) * R2D) > 25) { toast('Point the phone at the horizon (hold it upright), then tap Start.'); return; }
   yaw0 = yawOf(f);
   captureHeading = compass;
-  targets = makeTargets(lens, tripod); camPrompted = null; updateCount();
+  targets = makeTargets(effLens(), tripod, downMain); camPrompted = null; updateCount();
   $('#startSheet').style.display = 'none';
   $('#hint').style.display = 'block';
 };
@@ -892,6 +927,9 @@ function askConfirm(text, okLabel) {
 function workerMain() {
   const PI = Math.PI;
   let frames = [];
+  let ROW0 = 0, ROW1 = 1e9;     // only these output rows are drawn (the final picture is made in strips to save memory)
+  let BLEND_POW = 3;
+  let SAMPLE = 1;                // measure on every Nth pixel only (for speed)             // higher = each spot comes from the shot that sees it best (sharper, seams may show)
 
   self.onmessage = (ev) => {
     const m = ev.data;
@@ -927,8 +965,8 @@ function workerMain() {
     const lonc = Math.atan2(cx, cy);
     const r = Math.atan(Math.hypot(tx, ty)) + 0.02;
     const latTop = latc + r, latBot = latc - r;
-    const j0 = Math.max(0, Math.floor((PI / 2 - latTop) / PI * H));
-    const j1 = Math.min(H - 1, Math.ceil((PI / 2 - latBot) / PI * H));
+    const j0 = Math.max(ROW0, Math.floor((PI / 2 - latTop) / PI * H));
+    const j1 = Math.min(H - 1, ROW1 - 1, Math.ceil((PI / 2 - latBot) / PI * H));
     let full = latTop >= PI / 2 || latBot <= -PI / 2, dlon = PI;
     if (!full) { const s = Math.sin(r) / Math.cos(latc); if (s >= 1) full = true; else dlon = Math.asin(s) + 0.02; }
     let i0 = 0, n = W;
@@ -936,10 +974,18 @@ function workerMain() {
     const { sinLat, cosLat, sinLon, cosLon } = tabs;
     const fw = f.w, fh = f.h, data = f.data;
     const r0 = R[0], r1 = R[1], r2 = R[2], r3 = R[3], r4 = R[4], r5 = R[5], r6 = R[6], r7 = R[7], r8 = R[8];
-    for (let j = j0; j <= j1; j++) {
+    const sc0 = Math.sin(latc), cc0 = Math.cos(latc), cr = Math.cos(r);
+    for (let j = j0; j <= j1; j += SAMPLE) {
       const sl = sinLat[j], cl = cosLat[j], row = j * W;
-      for (let k = 0; k < n; k++) {
-        let i = i0 + k; i = ((i % W) + W) % W;
+      // exact span of this row inside the shot's circle (much faster near straight up / down)
+      let ri0 = i0, rn = n;
+      if (full) {
+        const den = cl * cc0, rhs = den > 1e-9 ? (cr - sl * sc0) / den : -2;
+        if (rhs > 1) continue;
+        if (rhs > -1) { const dl = Math.acos(rhs) + 0.01; ri0 = Math.floor((lonc - dl + PI) / (2 * PI) * W); rn = Math.min(W, Math.ceil(dl / PI * W) + 2); }
+      }
+      for (let k = 0; k < rn; k += SAMPLE) {
+        let i = ri0 + k; i = ((i % W) + W) % W;
         const wx = cl * sinLon[i], wy = cl * cosLon[i], wz = sl;
         const dz = r2 * wx + r5 * wy + r8 * wz;
         if (dz >= -1e-6) continue;
@@ -948,7 +994,7 @@ function workerMain() {
         if (px <= -1 || px >= 1) continue;
         const py = (r1 * wx + r4 * wy + r7 * wz) * inv / ty;
         if (py <= -1 || py >= 1) continue;
-        let wt = (1 - px * px) * (1 - py * py); wt = wt * wt * wt;
+        let wt = (1 - px * px) * (1 - py * py); wt = BLEND_POW === 3 ? wt * wt * wt : Math.pow(wt, BLEND_POW);
         const u = (px + 1) * 0.5 * fw - 0.5, v = (1 - py) * 0.5 * fh - 0.5;
         let x0 = Math.floor(u), y0 = Math.floor(v);
         const ax = u - x0, ay = v - y0;
@@ -974,8 +1020,8 @@ function workerMain() {
     const cs = Math.cos(fp.dyaw), sn = Math.sin(fp.dyaw);
     const r0 = R[0], r1 = R[1], r2 = R[2], r3 = R[3], r4 = R[4], r5 = R[5], r6 = R[6], r7 = R[7], r8 = R[8];
     const { sinLat, cosLat, sinLon, cosLon } = tabs, fw = f.w, fh = f.h, data = f.data;
-    const j0 = Math.max(0, Math.floor(H * (1 - aMax / PI)));
-    for (let j = j0; j < H; j++) {
+    const j0 = Math.max(ROW0, Math.floor(H * (1 - aMax / PI)));
+    for (let j = j0; j < Math.min(H, ROW1); j++) {
       const sl = sinLat[j], cl = cosLat[j];
       if (sl > -1e-3) continue;
       const t = -1 / sl, row = j * W;
@@ -1070,32 +1116,147 @@ function workerMain() {
   }
 
   // Like accumulate, but floor photos replace the other shots right under the camera (where the tripod is).
-  function accumulateAll(frames, params, gains, W, H, tabs, capDeg, onFrame) {
-    const fl = []; frames.forEach((f, i) => { if (f.floor && f.fp) fl.push(i); });
-    if (!fl.length) return accumulate(frames.filter(f => !f.floor), params.filter((p, i) => !frames[i].floor), gains.filter((g, i) => !frames[i].floor), W, H, tabs, onFrame);
+  // The final picture, made strip by strip (rows r0..r1) so even very large spheres fit in a phone's memory.
+  // Floor photos (if any) replace the other shots right under the camera, where the tripod is.
+  function renderStrip(frames, params, gains, W, H, tabs, capDeg, r0, r1) {
+    ROW0 = r0; ROW1 = r1;
+    const off = r0 * W, n = (r1 - r0) * W;
+    const acc = new Float32Array(n * 4), fw = new Float32Array(n);
     const capRow = new Float32Array(H);
     for (let j = 0; j < H; j++) { const a = 90 + (90 - (j + 0.5) / H * 180), x = Math.max(0, Math.min(1, (a - (capDeg - 5)) / 10)); capRow[j] = 1 - x * x * (3 - 2 * x); }
-    const acc = new Float32Array(W * H * 4), fw = new Float32Array(W * H);
-    let done = 0;
+    const fl = []; frames.forEach((f, i) => { if (f.floor && f.fp) fl.push(i); });
     for (const i of fl) {
       const g = gains[i];
       rasterFloor(frames[i], params[i].tx, params[i].ty, W, H, tabs, (p, r, gg, b, wt) => {
         const w = wt * capRow[(p / W) | 0]; if (w <= 0) return;
-        const q = p * 4; acc[q] += r * g[0] * w; acc[q + 1] += gg * g[1] * w; acc[q + 2] += b * g[2] * w; acc[q + 3] += w; fw[p] += w;
+        const pp = p - off, q = pp * 4; acc[q] += r * g[0] * w; acc[q + 1] += gg * g[1] * w; acc[q + 2] += b * g[2] * w; acc[q + 3] += w; fw[pp] += w;
       }, (capDeg + 6) * PI / 180);
-      if (onFrame) onFrame(++done, frames.length);
     }
+    const hasFloor = fl.length > 0;
     frames.forEach((f, k) => {
       if (f.floor) return;
       const g = gains[k];
       rasterize(f, params[k].tx, params[k].ty, W, H, tabs, (p, r, gg, b, wt) => {
-        const c = capRow[(p / W) | 0]; if (c > 0) wt *= 1 - c * Math.min(1, fw[p] * 3);
-        if (wt <= 0) return;
-        const q = p * 4; acc[q] += r * g[0] * wt; acc[q + 1] += gg * g[1] * wt; acc[q + 2] += b * g[2] * wt; acc[q + 3] += wt;
+        const pp = p - off;
+        if (hasFloor) { const c = capRow[(p / W) | 0]; if (c > 0) wt *= 1 - c * Math.min(1, fw[pp] * 3); if (wt <= 0) return; }
+        const q = pp * 4; acc[q] += r * g[0] * wt; acc[q + 1] += gg * g[1] * wt; acc[q + 2] += b * g[2] * wt; acc[q + 3] += wt;
       });
-      if (onFrame) onFrame(++done, frames.length);
     });
+    ROW0 = 0; ROW1 = 1e9;
     return acc;
+  }
+
+  // Small copies of the shots, for all the measuring steps (fast); the full-size shots are only used at the end.
+  function shrink(f, maxLong) {
+    const k = Math.min(1, maxLong / Math.max(f.w, f.h));
+    if (k >= 1) return f;
+    const w = Math.max(2, Math.round(f.w * k)), h = Math.max(2, Math.round(f.h * k)), d = new Uint8ClampedArray(w * h * 4), src = f.data;
+    for (let y = 0; y < h; y++) {
+      const sy0 = Math.floor(y / k), sy1 = Math.min(f.h, Math.floor((y + 1) / k));
+      for (let x = 0; x < w; x++) {
+        const sx0 = Math.floor(x / k), sx1 = Math.min(f.w, Math.floor((x + 1) / k));
+        let r = 0, g = 0, b = 0, n = 0;
+        for (let yy = sy0; yy < sy1; yy++) for (let xx = sx0; xx < sx1; xx++) { const q = (yy * f.w + xx) * 4; r += src[q]; g += src[q + 1]; b += src[q + 2]; n++; }
+        const q = (y * w + x) * 4; d[q] = r / n; d[q + 1] = g / n; d[q + 2] = b / n; d[q + 3] = 255;
+      }
+    }
+    return { w, h, data: d, R: f.R, lens: f.lens, floor: f.floor, fp: f.fp, full: f.full || f };
+  }
+  // copies sized for a mosaic W pixels wide: finer detail than the mosaic can show only adds noise to measurements
+  const sizedFor = (frames, W) => frames.map(f => shrink(f, Math.max(64, Math.round(W / 360 * (f.lens === 'ultra' ? 108 : 75) * 1.6))));
+
+  /* Fine alignment: the phone's motion sensors are accurate to about 1–2°, which at full resolution means
+     ghosting and blur where shots overlap. For every pair of overlapping shots we measure the tiny turn that
+     lines one up on the other (pictures compared directly, coarse to fine). Then all those measurements are
+     combined so every shot gets the turn that agrees best with all its neighbours. The first shot stays put. */
+  function refineRotations(lows, params, gains, progress) {
+    const D = PI / 180, n = lows.length;
+    const rot = (axis, a) => { const c = Math.cos(a), s = Math.sin(a);
+      return axis === 0 ? [1, 0, 0, 0, c, -s, 0, s, c] : axis === 1 ? [c, 0, s, 0, 1, 0, -s, 0, c] : [c, -s, 0, s, c, 0, 0, 0, 1]; };
+    const mul = (A, B) => { const C = new Array(9); for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) C[i * 3 + j] = A[i * 3] * B[j] + A[i * 3 + 1] * B[3 + j] + A[i * 3 + 2] * B[6 + j]; return C; };
+    const tr = (A) => [A[0], A[3], A[6], A[1], A[4], A[7], A[2], A[5], A[8]];
+    const expv = (v) => { const t = Math.hypot(v[0], v[1], v[2]); if (t < 1e-12) return [1, 0, 0, 0, 1, 0, 0, 0, 1];
+      const k = [v[0] / t, v[1] / t, v[2] / t], c = Math.cos(t), s = Math.sin(t), C1 = 1 - c;
+      return [c + k[0] * k[0] * C1, k[0] * k[1] * C1 - k[2] * s, k[0] * k[2] * C1 + k[1] * s,
+              k[1] * k[0] * C1 + k[2] * s, c + k[1] * k[1] * C1, k[1] * k[2] * C1 - k[0] * s,
+              k[2] * k[0] * C1 - k[1] * s, k[2] * k[1] * C1 + k[0] * s, c + k[2] * k[2] * C1]; };
+    const fwd = (R) => [-R[2], -R[5], -R[8]];
+    // each shot is measured against its 4 closest neighbours
+    const pairs = [], seen = new Set();
+    for (let i = 0; i < n; i++) {
+      const a = fwd(lows[i].R);
+      lows.map((f, j) => { const b = fwd(f.R); return [j, a[0] * b[0] + a[1] * b[1] + a[2] * b[2]]; })
+        .filter(x => x[0] !== i && x[1] > Math.cos(62 * D)).sort((x, y) => y[1] - x[1]).slice(0, 4)
+        .forEach(([j]) => { const key = Math.min(i, j) + ',' + Math.max(i, j); if (!seen.has(key)) { seen.add(key); pairs.push([Math.min(i, j), Math.max(i, j)]); } });
+    }
+    const stages = self.__alignStages || [
+      { W: 512, steps: [1.2 * D, 0.5 * D, 0.25 * D], sample: 1 },
+      { W: 1280, steps: [0.12 * D, 0.06 * D], sample: 2 }];
+    const total = stages.length * pairs.length; let done = 0;
+    const keepPow = BLEND_POW; BLEND_POW = 3;
+    for (const st of stages) {
+      const W = st.W, H = W / 2, tabs = tables(W, H);
+      const sz = sizedFor(lows, W); sz.forEach((c, i) => c.R = lows[i].R);
+      const acc = new Float32Array(W * H * 4), meas = [];
+      for (const [i, j] of pairs) {
+        acc.fill(0);
+        const gi = gains[i], gj = gains[j], f = sz[j], R0 = f.R;
+        rasterize(sz[i], params[i].tx, params[i].ty, W, H, tabs, (p, r, gg, b, wt) => { const q = p * 4;
+          acc[q] += r * gi[0] * wt; acc[q + 1] += gg * gi[1] * wt; acc[q + 2] += b * gi[2] * wt; acc[q + 3] += wt; });
+        let sw0 = 0;
+        // only the rows the reference shot covers can overlap
+        const Ri = sz[i].R, li = Math.asin(Math.max(-1, Math.min(1, -Ri[8]))), ri = Math.atan(Math.hypot(params[i].tx, params[i].ty)) + 0.03;
+        const rr0 = Math.max(0, Math.floor((PI / 2 - li - ri) / PI * H)), rr1 = Math.min(H, Math.ceil((PI / 2 - li + ri) / PI * H) + 1);
+        const score = (R) => {
+          f.R = R; let s = 0, sw = 0; SAMPLE = st.sample; ROW0 = rr0; ROW1 = rr1;
+          rasterize(f, params[j].tx, params[j].ty, W, H, tabs, (p, r, gg, b, wt) => {
+            const q = p * 4, w = acc[q + 3]; if (w < 1e-7 || wt < 1e-7) return;   // the whole overlap counts, up to the edges
+            s += Math.abs(0.299 * (r * gj[0] - acc[q] / w) + 0.587 * (gg * gj[1] - acc[q + 1] / w) + 0.114 * (b * gj[2] - acc[q + 2] / w)); sw += 1;
+          });
+          SAMPLE = 1; ROW0 = 0; ROW1 = 1e9; sw0 = sw;
+          return sw > 200 / (st.sample * st.sample) ? s / sw : Infinity;
+        };
+        let R = R0, best = score(R0);
+        if (isFinite(best)) {
+          // per axis: measure a small turn each way, fit a parabola, jump to its lowest point
+          for (const step of st.steps) for (let axis = 0; axis < 3; axis++) {
+            const Rm = mul(R, rot(axis, -step)), Rp = mul(R, rot(axis, step)), sm = score(Rm), sp = score(Rp);
+            if (!isFinite(sm) || !isFinite(sp)) continue;
+            const den = sm - 2 * best + sp;
+            let a = den > 1e-9 ? 0.5 * (sm - sp) / den * step : (sm < sp ? -step : step);
+            a = Math.max(-1.5 * step, Math.min(1.5 * step, a));
+            const Ra = mul(R, rot(axis, a)), sa = score(Ra);
+            const opts = [[best, R], [sm, Rm], [sp, Rp], [sa, Ra]].sort((x, y) => x[0] - y[0]);
+            best = opts[0][0]; R = opts[0][1];
+          }
+          score(R);
+          if (sw0 > 200 / (st.sample * st.sample)) {
+            const Wc = mul(R, tr(R0));          // the turn, in world terms, that j needed to match i
+            meas.push({ i, j, v: [0.5 * (Wc[7] - Wc[5]), 0.5 * (Wc[2] - Wc[6]), 0.5 * (Wc[3] - Wc[1])], w: Math.sqrt(sw0) });
+          }
+        }
+        f.R = R0;
+        if (!((++done) % 4)) progress('Fine-tuning the alignment…', done / total);
+      }
+      // combine: find turns c_k with c_j − c_i ≈ measured, the first shot fixed
+      const c = lows.map(() => [0, 0, 0]);
+      const byK = lows.map(() => []); meas.forEach(m => { byK[m.i].push(m); byK[m.j].push(m); });
+      for (let it = 0; it < 400; it++) {
+        for (let k = 1; k < n; k++) {
+          let sx = 0, sy = 0, sz2 = 0, sw = 0;
+          for (const m of byK[k]) {
+            const o = m.i === k ? c[m.j] : c[m.i], sg = m.i === k ? -1 : 1;
+            sx += (o[0] + sg * m.v[0]) * m.w; sy += (o[1] + sg * m.v[1]) * m.w; sz2 += (o[2] + sg * m.v[2]) * m.w; sw += m.w;
+          }
+          if (sw > 0) c[k] = [sx / sw, sy / sw, sz2 / sw];
+        }
+      }
+      for (let k = 1; k < n; k++) {
+        const R = mul(expv(c[k]), lows[k].R);
+        lows[k].R = R; if (lows[k].full) lows[k].full.R = R;
+      }
+    }
+    BLEND_POW = keepPow;
   }
 
   function accumulate(frames, params, gains, W, H, tabs, onFrame) {
@@ -1113,6 +1274,7 @@ function workerMain() {
   // Per-shot colour gains so neighbouring shots agree in their overlaps (auto-exposure differences).
   function estimateGains(frames, params) {
     const W = 512, H = 256, tabs = tables(W, H);
+    frames = sizedFor(frames, W);
     let gains = frames.map(() => [1, 1, 1]);
     for (let it = 0; it < 5; it++) {
       const acc = accumulate(frames, params, gains, W, H, tabs);
@@ -1161,6 +1323,7 @@ function workerMain() {
   // Finds each camera's field of view: the value where neighbouring shots agree best in their overlaps.
   function calibrateFov(frames, fovs, lenses, progress) {
     const W = 768, H = 384, tabs = tables(W, H);
+    frames = sizedFor(frames, W);
     fovs = Object.assign({}, fovs);
     const gains = estimateGains(frames, frames.map(f => frameParams(f, fovs)));
     const RANGE = { main: [52, 88], ultra: [84, 122], front: [55, 95] };
@@ -1231,35 +1394,48 @@ function workerMain() {
 
   function stitch(frames, opts, progress) {
     if (!frames.length) throw new Error('No photos to stitch.');
-    const main = frames.filter(f => !f.floor), floors = frames.filter(f => f.floor);
+    const lows = frames.map(f => shrink(f, 480));
+    const main = lows.filter(f => !f.floor), floors = lows.filter(f => f.floor);
     if (!main.length) throw new Error('No photos to stitch.');
+    BLEND_POW = 3;
     let fovs = Object.assign({ main: 70, ultra: 104, front: 74 }, opts.fovs);
     if (opts.autoLenses && opts.autoLenses.length && main.length >= 4) { progress('Measuring your lens…', 0); fovs = calibrateFov(main, fovs, opts.autoLenses, progress); }
     const params = frames.map(f => frameParams(f, fovs)), mParams = main.map(f => frameParams(f, fovs));
     progress('Balancing brightness…', 0);
-    const mGains = (opts.gain && main.length > 1) ? estimateGains(main, mParams) : main.map(() => [1, 1, 1]);
-    const gains = frames.map(f => f.floor ? [1, 1, 1] : mGains[main.indexOf(f)]);
+    let mGains = (opts.gain && main.length > 1) ? estimateGains(main, mParams) : main.map(() => [1, 1, 1]);
+    if (opts.align !== false && main.length >= 3) {
+      refineRotations(main, mParams, mGains, progress);
+      if (opts.gain) mGains = estimateGains(main, mParams);
+    }
+    const gains = lows.map(f => f.floor ? [1, 1, 1] : mGains[main.indexOf(f)]);
     const cap = opts.floorCap || 28, floorInfo = [];
     floors.forEach((ff, n) => {
       progress('Lining up the floor…', n / floors.length);
       const r = alignFloor(main, mParams, mGains, ff, frameParams(ff, fovs), cap);
-      gains[frames.indexOf(ff)] = r.gain; floorInfo.push(r);
+      gains[lows.indexOf(ff)] = r.gain; floorInfo.push(r);
+      if (ff.full) ff.full.fp = ff.fp;
     });
     const W = opts.width, H = W / 2, tabs = tables(W, H);
-    const acc = accumulateAll(frames, params, gains, W, H, tabs, cap, (k, n) => progress('Blending photos…', k / n));
-    progress('Filling gaps…', 1);
-    for (let p = 0; p < W * H; p++) {
-      const q = p * 4, w = acc[q + 3];
-      if (w > 1e-9) { acc[q] /= w; acc[q + 1] /= w; acc[q + 2] /= w; acc[q + 3] = 1; } else acc[q + 3] = 0;
-    }
-    fillHoles(acc, W, H);
+    BLEND_POW = opts.blend === 'soft' ? 3 : 8;
     const out = new Uint8ClampedArray(W * H * 4);
-    for (let p = 0; p < W * H * 4; p += 4) { out[p] = acc[p]; out[p + 1] = acc[p + 1]; out[p + 2] = acc[p + 2]; out[p + 3] = 255; }
+    const SH = Math.max(32, Math.floor(3e6 / W));
+    for (let r0 = 0; r0 < H; r0 += SH) {
+      const r1 = Math.min(H, r0 + SH), acc = renderStrip(frames, params, gains, W, H, tabs, cap, r0, r1);
+      for (let p = 0, o = r0 * W * 4; p < (r1 - r0) * W; p++, o += 4) {
+        const q = p * 4, w = acc[q + 3];
+        if (w > 1e-9) { out[o] = acc[q] / w; out[o + 1] = acc[q + 1] / w; out[o + 2] = acc[q + 2] / w; out[o + 3] = 1; }
+      }
+      progress('Blending photos…', r1 / H);
+    }
+    BLEND_POW = 3;
+    progress('Filling gaps…', 1);
+    fillHoles(out, W, H);
+    for (let p = 3; p < W * H * 4; p += 4) out[p] = 255;
     return { W, H, fovs, floorInfo, data: out };
   }
 
   // exposed for testing
-  self.__core = { stitch, rasterize, rasterFloor, alignFloor, accumulate, tables, frameParams, estimateGains, calibrateFov };
+  self.__core = { stitch, rasterize, rasterFloor, alignFloor, accumulate, refineRotations, shrink, tables, frameParams, estimateGains, calibrateFov };
 }
 
 let worker = null, session = null; // session = {id, hasFrames}
@@ -1279,9 +1455,13 @@ function finishCapture() {
   newWorker();
   worker.postMessage({ type: 'frames', frames: shots }, shots.map(s => s.data.buffer));
   session = { id: Date.now(), hasFrames: true, heading: captureHeading, lenses, hasFloor, floorCap: 28 };
-  runStitch({ fovs: Object.assign({}, fovs), autoLenses: lenses.filter(l => !isCal(l)), gain: true, width: parseInt(store('res') || '3072', 10), floorCap: 28 });
+  runStitch(Object.assign(stitchPrefs(), { fovs: Object.assign({}, fovs), autoLenses: lenses.filter(l => !isCal(l)), gain: true, floorCap: 28 }));
 }
 
+// Sharpness settings, remembered on this phone
+function stitchPrefs() {
+  return { width: parseInt(store('res') || '4096', 10), blend: store('blend') || 'sharp', align: store('align') !== '0' };
+}
 function runStitch(opts) {
   show('stitch');
   $('#stitchBar').style.width = '0%'; $('#stitchMsg').textContent = 'Preparing…';
@@ -1680,7 +1860,7 @@ function syncAdjust() {
     <input type="range" id="capRange" min="12" max="45" step="1" value="${session.floorCap}"></label>`;
   box.querySelectorAll('input[data-lens]').forEach(i => i.oninput = () => { box.querySelector(`[data-v=${i.dataset.lens}]`).textContent = (+i.value).toFixed(1) + '°'; });
   const cr = $('#capRange'); if (cr) cr.oninput = () => { $('#capV').textContent = cr.value + '°'; };
-  $('#resSel').value = store('res') || '3072';
+  const sp = stitchPrefs(); $('#resSel').value = String(sp.width); $('#blendSel').value = sp.blend; $('#alignChk').checked = sp.align;
 }
 $('#btnAdjust').onclick = () => { syncAdjust(); $('#adjustModal').classList.add('on'); };
 $('#btnAdjustClose').onclick = () => $('#adjustModal').classList.remove('on');
@@ -1688,9 +1868,10 @@ function restitch(auto) {
   if (!worker || !session) return;
   $('#adjustModal').classList.remove('on'); viewer.stop();
   const width = parseInt($('#resSel').value, 10); store('res', String(width));
+  const blend = $('#blendSel').value, align = $('#alignChk').checked; store('blend', blend); store('align', align ? '1' : '0');
   if (!auto) $('#fovBox').querySelectorAll('input[data-lens]').forEach(i => setFov(i.dataset.lens, parseFloat(i.value), true));
   const cr = $('#capRange'); if (cr && session) session.floorCap = +cr.value;
-  runStitch({ fovs: Object.assign({}, fovs), autoLenses: auto ? ((session && session.lenses) || ['main']) : [], gain: $('#gainChk').checked, width, floorCap: (session && session.floorCap) || 28 });
+  runStitch({ fovs: Object.assign({}, fovs), autoLenses: auto ? ((session && session.lenses) || ['main']) : [], gain: $('#gainChk').checked, width, blend, align, floorCap: (session && session.floorCap) || 28 });
 }
 $('#btnRestitch').onclick = () => restitch(false);
 $('#btnAuto').onclick = () => restitch(true);
