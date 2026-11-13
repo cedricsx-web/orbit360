@@ -172,6 +172,10 @@
     <button id="btnUndo" class="btn ghost small" disabled>↶ Undo</button>
   </div>
   <div id="hint"><span id="hintText">Aim at the white dot</span></div>
+  <div id="zoomBox" style="position:absolute;left:14px;right:14px;bottom:calc(var(--sb) + 112px);z-index:3;display:none;background:rgba(0,0,0,.6);border-radius:14px;padding:8px 12px;font-size:14px">
+    Zoom until the tripod feet are outside the bright frame: <b id="zoomV">1.6×</b>
+    <input id="zoomRange" type="range" min="1" max="3.5" step="0.1" value="1.6" style="width:100%;accent-color:#4fd1c5">
+  </div>
   <div class="bottombar">
     <canvas id="minimap" width="300" height="150"></canvas>
     <div style="display:flex;flex-direction:column;gap:8px;align-items:flex-end">
@@ -574,6 +578,9 @@ function sharpness() {
   return s2 / n - (s / n) ** 2;
 }
 let burst = null, vfcFlag = true;
+let floorZoom = parseFloat(store('floorZoom')) || 1.6;
+$('#zoomRange').value = floorZoom; $('#zoomV').textContent = floorZoom.toFixed(1) + '×';
+$('#zoomRange').oninput = (e) => { floorZoom = +e.target.value; store('floorZoom', String(floorZoom)); $('#zoomV').textContent = floorZoom.toFixed(1) + '×'; burst = null; holdStart = 0; };
 function watchFrames() {             // new camera frames (where the browser can tell us)
   if (!video.requestVideoFrameCallback) return;
   const cb = () => { vfcFlag = true; if (capturing) video.requestVideoFrameCallback(cb); };
@@ -615,7 +622,11 @@ function makeTargets(lensKey, onTripod, downMain) {
   if (gu.fov / 2 + 45 < 96) t.push({ yaw: 0, pitch: 90 });
   // straight down: on a tripod that would only show the tripod, so the hand-held floor photo does it instead
   if (gd.fov / 2 + 45 < 96 && !onTripod) t.push({ yaw: 0, pitch: -90 });
-  return t.map(o => ({ ...o, dir: dirFrom(o.yaw * D2R, o.pitch * D2R), done: false, cam: camFor(o.pitch) }));
+  const out = t.map(o => ({ ...o, dir: dirFrom(o.yaw * D2R, o.pitch * D2R), done: false, cam: camFor(o.pitch) }));
+  // When the phone lies flat for the ceiling (front camera), the back camera looks straight at the floor:
+  // a zoomed-in shot from there sees the floor between the tripod feet, and the feet stay out of frame.
+  if (onTripod === 'ceil') out.push({ yaw: 0, pitch: -90, dir: [0, 0, -1], done: false, cam: 'main', floor: true, zoomFloor: true });
+  return out;
 }
 // with more than one camera in the plan, each shot waits for its own camera
 const multiCam = () => new Set(targets.map(t => t.cam)).size > 1;
@@ -697,7 +708,8 @@ function updateCamUI() {
   $('#planText').textContent = `${t.length} shots` + (parts.length > 1 ? ': ' + parts.join(', ') + '.' : '.') +
     (tripod === 'ceil' ? ' The front camera photographs the ceiling while you tilt the phone down.'
      : tripod === 'floor' ? ' The front camera photographs the floor while you tilt the phone up.' : '') +
-    (tripod ? ' At the end, remove the tripod for one hand-held floor photo.' : '') +
+    (tripod === 'ceil' ? ' The floor is one zoomed-in shot straight down, from the same position, so the tripod feet stay out.'
+     : tripod ? ' At the end, remove the tripod for one hand-held floor photo.' : '') +
     (video.videoWidth ? ` Camera: ${video.videoWidth}×${video.videoHeight}` + (Math.max(video.videoWidth, video.videoHeight) < 1280 ? ' (low: shots will be soft)' : '') + '.' : '');
 }
 
@@ -716,7 +728,7 @@ async function startCapture() {
     $('#homeErr').textContent = msg; stopStream(); return;
   }
   targets = []; frames = []; yaw0 = null; holdStart = 0; lastF = null; camPrompted = null; floorStep = 0;
-  $('#camSheet').style.display = 'none'; $('#floorSheet').style.display = 'none';
+  $('#camSheet').style.display = 'none'; $('#floorSheet').style.display = 'none'; $('#zoomBox').style.display = 'none';
   updateCamUI();
   $('#startSheet').style.display = 'block';
   $('#hint').style.display = 'none';
@@ -814,14 +826,14 @@ function tick(now) {
   if (best) {
     const aDeg = a * R2D;
     const shakeNow = hasGyro && now - shakeT < 400 ? shake : 0;
-    const aligned = aDeg < (best.floor ? 8 : ALIGN_DEG), still = speed < STILL_TURN && shakeNow < STILL_SHAKE;
+    const aligned = aDeg < (best.zoomFloor ? 5 : best.floor ? 8 : ALIGN_DEG), still = speed < STILL_TURN && shakeNow < STILL_SHAKE;
     const settle = tripod ? SETTLE_MS.tripod : SETTLE_MS.hand;
     if (burst && (burst.target !== best || !aligned || speed > STILL_TURN * 2 || shakeNow > STILL_SHAKE * 2)) { burst = null; holdStart = 0; }
     if (burst) {
       // look at each new camera frame, keep the sharpest
       if (vfcFlag || !video.requestVideoFrameCallback) {
         vfcFlag = false;
-        if (still) { const sh = sharpness(); if (sh > burst.sharp) { burst.sharp = sh; burst.img = grabFrame(); burst.R = R.slice(); } }
+        if (still) { const sh = sharpness(); if (sh > burst.sharp) { burst.sharp = sh; burst.img = grabFrame(best.zoomFloor ? floorZoom : 1); burst.R = R.slice(); } }
       }
       octx.strokeStyle = '#4fd1c5'; octx.lineWidth = 6;
       octx.beginPath(); octx.arc(cx, cy, 24, 0, Math.PI * 2); octx.stroke();
@@ -834,6 +846,13 @@ function tick(now) {
       if (prog >= 1) burst = { target: best, start: now, sharp: -1, img: null, R: null };
     } else holdStart = 0;
     best._shaky = aligned && !still;
+    if (best.zoomFloor) {   // show what the zoomed floor shot will contain
+      const zw = vr.w / floorZoom, zh = vr.h / floorZoom, zx = cx - zw / 2, zy = cy - zh / 2;
+      octx.fillStyle = 'rgba(0,0,0,.55)';
+      octx.fillRect(vr.x, vr.y, vr.w, zy - vr.y); octx.fillRect(vr.x, zy + zh, vr.w, vr.y + vr.h - zy - zh);
+      octx.fillRect(vr.x, zy, zx - vr.x, zh); octx.fillRect(zx + zw, zy, vr.x + vr.w - zx - zw, zh);
+      octx.strokeStyle = '#ffb547'; octx.lineWidth = 3; octx.strokeRect(zx, zy, zw, zh);
+    }
 
     // arrow toward target when it's not close
     const p = project(best.dir);
@@ -845,6 +864,7 @@ function tick(now) {
       drawArrow(cx, cy, ang);
     }
     $('#hintText').textContent = hintFor(best, f, aligned, still);
+    $('#zoomBox').style.display = best.zoomFloor ? 'block' : 'none';
     if (best.floor) $('#hintText').textContent = aligned ? (still ? 'Hold…' : 'Hold still…') : 'Point the phone straight down over the spot where the tripod stood';
   } else if (yaw0 !== null && multiCam() && targets.some(t => !t.done)) promptSwitch();
   drawMinimap(f);
@@ -884,6 +904,7 @@ $('#tripodSel').onchange = (e) => { tripod = e.target.value; store('tripod', tri
 
 function hintFor(t, f, aligned, still) {
   if (burst) return 'Taking the sharpest shot…';
+  if (t.zoomFloor && !aligned) return 'Floor: lay the phone flat (screen up) so the back camera looks straight down';
   if (aligned && !still) return tripod ? 'Let go of the phone: waiting for the shake to stop…' : 'Hold still… the phone is still moving a little';
   if (aligned) return 'Hold…';
   if (curCam === 'front') {
@@ -927,24 +948,26 @@ function drawMinimap(f) {
   }
 }
 
-function grabFrame() {
-  const vw = video.videoWidth, vh = video.videoHeight;
-  const s = Math.min(1, FRAME_LONG / Math.max(vw, vh));
-  const w = Math.round(vw * s), h = Math.round(vh * s);
+function grabFrame(zoom) {
+  const vw = video.videoWidth, vh = video.videoHeight, z = zoom || 1;
+  const sw = vw / z, sh = vh / z, s = Math.min(1, FRAME_LONG / Math.max(sw, sh));   // zoom = keep the middle of the picture
+  const w = Math.round(sw * s), h = Math.round(sh * s);
   grab.width = w; grab.height = h;
-  gctx.drawImage(video, 0, 0, w, h);
-  return gctx.getImageData(0, 0, w, h);
+  gctx.drawImage(video, (vw - sw) / 2, (vh - sh) / 2, sw, sh, 0, 0, w, h);
+  const img = gctx.getImageData(0, 0, w, h); img.zoom = z;
+  return img;
 }
 function takeShot(target, R, img) {
   img = img || grabFrame();
   const w = img.width, h = img.height;
-  frames.push({ w, h, data: img.data, R: R.slice(), target, lens: curCam, floor: !!target.floor });
+  frames.push({ w, h, data: img.data, R: R.slice(), target, lens: curCam, floor: !!target.floor,
+    crop: target.zoomFloor ? 1 / (img.zoom || floorZoom) : 1, mounted: !!target.zoomFloor });
   target.done = true;
   const fl = $('#flash'); fl.style.transition = 'none'; fl.style.opacity = '.55';
   requestAnimationFrame(() => { fl.style.transition = 'opacity .3s'; fl.style.opacity = '0'; });
   updateCount();
-  if (target.floor) { floorStep = 0; setTimeout(offerFloor, 300); return; }
-  if (targets.every(t => t.done)) setTimeout(() => { if (tripod) offerFloor(); else finishCapture(); }, 250);
+  if (target.floor && !target.zoomFloor) { floorStep = 0; setTimeout(offerFloor, 300); return; }
+  if (targets.every(t => t.done)) setTimeout(() => { $('#zoomBox').style.display = 'none'; if (tripod === 'floor') offerFloor(); else finishCapture(); }, 250);
 }
 
 $('#btnStart').onclick = () => {
@@ -1011,7 +1034,7 @@ function workerMain() {
 
   // fovs: field of view (degrees, long side) of each camera: {main, ultra, front}
   function frameParams(f, fovs) {
-    const tl = Math.tan((fovs[f.lens || 'main'] || 70) * PI / 360), L = Math.max(f.w, f.h);
+    const tl = Math.tan((fovs[f.lens || 'main'] || 70) * PI / 360) * (f.crop || 1), L = Math.max(f.w, f.h);
     return { tx: tl * f.w / L, ty: tl * f.h / L };
   }
 
@@ -1093,7 +1116,10 @@ function workerMain() {
         if (px <= -1 || px >= 1) continue;
         const py = (r1 * vx + r4 * vy + r7 * vz) * inv / ty;
         if (py <= -1 || py >= 1) continue;
-        const fe = Math.max(0, Math.min(1, (py + 0.55) / 0.65)), wt = fe * fe * (3 - 2 * fe) * (1 - px * px) * (1 - py * py);
+        // zoomed tripod shot: full strength up to near its edges (it must fully hide the tripod in the other shots)
+        const fe = f.mounted ? 1 : Math.max(0, Math.min(1, (py + 0.55) / 0.65));
+        const wt = f.mounted ? Math.min(1, (1 - Math.abs(px)) / 0.25) * Math.min(1, (1 - Math.abs(py)) / 0.25)
+                             : fe * fe * (3 - 2 * fe) * (1 - px * px) * (1 - py * py);
         if (wt <= 0) continue;
         const u = (px + 1) * 0.5 * fw - 0.5, v = (1 - py) * 0.5 * fh - 0.5;
         let x0 = Math.floor(u), y0 = Math.floor(v); const ax = u - x0, ay = v - y0;
@@ -1110,12 +1136,15 @@ function workerMain() {
     }
   }
   // Fits a floor photo to the ring of floor just around the tripod, seen in the other shots.
-  function alignFloor(main, mParams, mGains, ff, fpar, capDeg) {
+  function alignFloor(main, mParams, mGains, ff, fpar, capDeg, fallbackGain) {
+    const mounted = !!ff.mounted, cover = Math.atan(Math.min(fpar.tx, fpar.ty)) * 180 / PI;
     const W = 512, H = 256, tabs = tables(W, H);
     const acc = accumulate(main, mParams, mGains, W, H, tabs);
     const rowAng = new Float32Array(H);
     for (let j = 0; j < H; j++) rowAng[j] = 90 + (90 - (j + 0.5) / H * 180);   // degrees from straight down
-    const lo = Math.max(18, capDeg - 8), hi = capDeg + 16;   // just outside the tripod's legs
+    // hand-held: compare just outside the tripod's legs. Zoomed shot from the tripod: it only sees the middle,
+    // so compare where it overlaps the downward shots (their tripod-leg pixels are ignored by the robust match)
+    const lo = mounted ? 3 : Math.max(18, capDeg - 8), hi = mounted ? cover : capDeg + 16;
     const pairs = (fp, step) => {
       ff.fp = fp; const out = []; let c = 0;
       rasterFloor(ff, fpar.tx, fpar.ty, W, H, tabs, (p, r, g, b, wt) => {
@@ -1130,7 +1159,7 @@ function workerMain() {
     // best-matching 75% of pixels, so a stray tripod leg (in the other shots) or your feet (in this one) are ignored.
     const score = (fp, step) => {
       const o = pairs(fp, step), n = o.length / 5;
-      if (n < 300) return { s: Infinity, n };
+      if (n < (mounted ? 120 : 300)) return { s: Infinity, n };
       const lf = new Float32Array(n), lm = new Float32Array(n);
       let mf = 0, mm = 0;
       for (let i = 0, k = 0; i < o.length; i += 5, k++) {
@@ -1144,31 +1173,50 @@ function workerMain() {
       vf = Math.sqrt(vf / n) || 1; vm = Math.sqrt(vm / n) || 1;
       const e = new Float32Array(n);
       for (let k = 0; k < n; k++) e[k] = Math.abs((lf[k] - mf) / vf - (lm[k] - mm) / vm);
-      e.sort(); const m = Math.floor(n * 0.75); let t = 0; for (let k = 0; k < m; k++) t += e[k];
+      e.sort(); const m = Math.floor(n * (mounted ? 0.6 : 0.75)); let t = 0; for (let k = 0; k < m; k++) t += e[k];
       return { s: t / m, n, tex: vm };
     };
     const range = (a, b, st) => { const r = []; for (let v = a; v <= b + 1e-9; v += st) r.push(v); return r; };
     let fp = { k: 1, dx: 0, dy: 0, dyaw: 0 }, best = score(fp, 1);
     // 1) coarse search over height and sideways offset, 2) fine-tune everything (including a small turn)
-    for (const k of range(0.6, 1.4, 0.1)) for (const dx of range(-0.3, 0.3, 0.075)) for (const dy of range(-0.3, 0.3, 0.075)) {
+    // on the tripod the camera barely moved: only a few centimetres to search
+    const g = mounted ? { k: [0.92, 1.08, 0.04], d: [-0.12, 0.12, 0.024] } : { k: [0.6, 1.4, 0.1], d: [-0.3, 0.3, 0.075] };
+    for (const k of range(...g.k)) for (const dx of range(...g.d)) for (const dy of range(...g.d)) {
       const c = { k, dx, dy, dyaw: 0 }, sc = score(c, 3); if (sc.s < best.s) { best = sc; fp = c; }
     }
     best = score(fp, 1);
     const tryAxis = (key, vals) => { for (const v of vals) { const c = Object.assign({}, fp, { [key]: v }), sc = score(c, 1); if (sc.s < best.s) { best = sc; fp = c; } } };
     for (let round = 0; round < 3; round++) {
-      const f = [1, 0.4, 0.15][round];
+      const f = [1, 0.4, 0.15][round] * (mounted ? 0.4 : 1);
       tryAxis('dyaw', range(fp.dyaw - 0.14 * f, fp.dyaw + 0.14 * f, 0.0175 * f));
       tryAxis('k', range(fp.k - 0.1 * f, fp.k + 0.1 * f, 0.02 * f).filter(v => v > 0.3));
       tryAxis('dx', range(fp.dx - 0.08 * f, fp.dx + 0.08 * f, 0.016 * f));
       tryAxis('dy', range(fp.dy - 0.08 * f, fp.dy + 0.08 * f, 0.016 * f));
     }
     // a plain, untextured floor gives nothing to line up on: keep the phone's own reading
-    if (!isFinite(best.s) || best.s > 0.45 || (best.tex || 0) < 4) fp = { k: 1, dx: 0, dy: 0, dyaw: 0 };
-    // colour match with the surrounding floor
-    const o = pairs(fp), sm = [0, 0, 0], sf = [0, 0, 0];
-    for (let i = 0; i < o.length; i += 5) { const q = o[i] * 4, w = acc[q + 3], wt = o[i + 4];
-      for (let c = 0; c < 3; c++) { sm[c] += acc[q + c] / w * wt; sf[c] += o[i + 1 + c] * wt; } }
-    const gain = [0, 1, 2].map(c => (sf[c] > 1 && sm[c] > 1) ? Math.min(2, Math.max(0.5, sm[c] / sf[c])) : 1);
+    if (!isFinite(best.s) || best.s > (mounted ? 0.3 : 0.45) || (best.tex || 0) < 4) fp = { k: 1, dx: 0, dy: 0, dyaw: 0 };
+    // colour match with the surrounding floor: median ratio over the pixels that agree best
+    // (tripod legs in the other shots would otherwise darken the patch)
+    const o = pairs(fp), rows = [];
+    for (let i = 0; i < o.length; i += 5) { const q = o[i] * 4, w = acc[q + 3];
+      const f3 = [o[i + 1], o[i + 2], o[i + 3]], m3 = [acc[q] / w, acc[q + 1] / w, acc[q + 2] / w];
+      rows.push({ f3, m3, lf: 0.299 * f3[0] + 0.587 * f3[1] + 0.114 * f3[2], lm: 0.299 * m3[0] + 0.587 * m3[1] + 0.114 * m3[2] }); }
+    let gain = [1, 1, 1];
+    if (rows.length > 50) {
+      const mean = (k) => rows.reduce((a, r) => a + r[k], 0) / rows.length, mf = mean('lf'), mm = mean('lm');
+      const sd = (k, m) => Math.sqrt(rows.reduce((a, r) => a + (r[k] - m) ** 2, 0) / rows.length) || 1, sf = sd('lf', mf), sm = sd('lm', mm);
+      rows.forEach(r => r.e = Math.abs((r.lf - mf) / sf - (r.lm - mm) / sm));
+      const inl = rows.slice().sort((a, b) => a.e - b.e).slice(0, Math.floor(rows.length * 0.6));
+      // the zoomed tripod shot only overlaps the others where they show the (dark) tripod head: there, trust
+      // the brighter matches (the floor) rather than the middle value
+      const src = mounted ? rows : inl, pct = mounted ? 0.9 : 0.5;
+      gain = [0, 1, 2].map(c => { const v = src.filter(r => r.f3[c] > 8).map(r => r.m3[c] / r.f3[c]).sort((a, b) => a - b);
+        return v.length > 20 ? Math.min(mounted ? 1.6 : 2, Math.max(mounted ? 0.6 : 0.5, v[Math.floor((v.length - 1) * pct)])) : 1; });
+    }
+    // nothing reliable to compare with (the overlap only shows the tripod): use the same camera's usual brightness
+    // a measured brightness far from that camera's usual one means it was measured on the tripod, not the floor
+    if (mounted && fallbackGain && (!isFinite(best.s) || best.s > 0.3 || rows.length <= 50 ||
+        gain.some((g, c) => Math.abs(Math.log(g / fallbackGain[c])) > Math.log(1.3)))) gain = fallbackGain.slice();
     ff.fp = fp;
     return { fp, gain, score: best.s };
   }
@@ -1218,7 +1266,7 @@ function workerMain() {
         const q = (y * w + x) * 4; d[q] = r / n; d[q + 1] = g / n; d[q + 2] = b / n; d[q + 3] = 255;
       }
     }
-    return { w, h, data: d, R: f.R, lens: f.lens, floor: f.floor, fp: f.fp, full: f.full || f };
+    return { w, h, data: d, R: f.R, lens: f.lens, floor: f.floor, fp: f.fp, crop: f.crop, mounted: f.mounted, full: f.full || f };
   }
   // copies sized for a mosaic W pixels wide: finer detail than the mosaic can show only adds noise to measurements
   const sizedFor = (frames, W) => frames.map(f => shrink(f, Math.max(64, Math.round(W / 360 * (f.lens === 'ultra' ? 108 : 75) * 1.6))));
@@ -1466,10 +1514,14 @@ function workerMain() {
       if (opts.gain) mGains = estimateGains(main, mParams);
     }
     const gains = lows.map(f => f.floor ? [1, 1, 1] : mGains[main.indexOf(f)]);
-    const cap = opts.floorCap || 28, floorInfo = [];
+    let cap = opts.floorCap || 28; const floorInfo = [];
+    // the zoomed shot can only replace what it sees: the patch stops just inside its edge
+    floors.forEach(ff => { if (ff.mounted) { const fp = frameParams(ff, fovs); cap = Math.atan(Math.hypot(fp.tx, fp.ty)) * 180 / PI + 4; } });   // its own edges decide where it stops
     floors.forEach((ff, n) => {
       progress('Lining up the floor…', n / floors.length);
-      const r = alignFloor(main, mParams, mGains, ff, frameParams(ff, fovs), cap);
+      const same = main.map((f, i) => f.lens === ff.lens ? mGains[i] : null).filter(Boolean);
+      const fb = same.length ? [0, 1, 2].map(c => same.reduce((a, g) => a + g[c], 0) / same.length) : [1, 1, 1];
+      const r = alignFloor(main, mParams, mGains, ff, frameParams(ff, fovs), cap, fb);
       gains[lows.indexOf(ff)] = r.gain; floorInfo.push(r);
       if (ff.full) ff.full.fp = ff.fp;
     });
@@ -1505,7 +1557,7 @@ function newWorker() {
 
 function finishCapture() {
   if (frames.length < 2) return;
-  const shots = frames.map(f => ({ w: f.w, h: f.h, data: f.data, R: f.R, lens: f.lens || 'main', floor: !!f.floor }));
+  const shots = frames.map(f => ({ w: f.w, h: f.h, data: f.data, R: f.R, lens: f.lens || 'main', floor: !!f.floor, crop: f.crop || 1, mounted: !!f.mounted }));
   const lenses = [...new Set(shots.filter(s => !s.floor).map(s => s.lens))];
   const hasFloor = shots.some(s => s.floor);
   stopStream();
