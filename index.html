@@ -291,7 +291,8 @@
   </div>
   <div id="feWrap"><canvas id="feCanvas" width="720" height="720"></canvas></div>
   <div id="fePanel">
-    <p style="margin:4px 0 8px;font-size:13px;color:#c9d0dc">The floor seen from above, centred under the camera. The dashed circle is the area that gets replaced. Drag the photo with one finger; pinch to zoom, twist to turn.</p>
+    <p style="margin:4px 0 4px;font-size:13px;color:#c9d0dc">The floor seen from above, centred under the camera. The dashed circle is the area that gets replaced.</p>
+    <p id="feHint" style="margin:0 0 8px;font-size:13px;font-weight:600;color:#ffb547"></p>
     <div class="seg">
       <button data-fm="shot" id="feModeShot">Floor shot</button>
       <button data-fm="photo">Other photo</button>
@@ -2535,6 +2536,9 @@ function feSync() {
   $('#fePhotoCtl').style.display = (FE.mode === 'shot' || FE.mode === 'photo') ? '' : 'none';
   $('#feColorCtl').style.display = FE.mode === 'color' ? '' : 'none';
   $('#feRevert').style.display = FE.item.original ? '' : 'none';
+  $('#feHint').textContent = feMovable() ? 'Drag the photo with one finger; pinch to zoom, twist with two fingers to turn.'
+    : (FE.mode === 'blur' || FE.mode === 'color') ? 'Nothing to move in this mode: choose “Floor shot” or “Other photo” to place a photo.'
+    : 'Choose a photo first.';
 }
 const feChanged = () => { feLayerDirty = true; feSync(); feDraw(); };
 // the view shows about 3× the circle, so the tripod area is big enough to work on
@@ -2545,10 +2549,18 @@ function feZoomView() {
 }
 
 function loadImg(src) { return new Promise((res, rej) => { const u = typeof src === 'string' ? src : URL.createObjectURL(src); const im = new Image(); im.onload = () => res(im); im.onerror = () => rej(new Error('Could not open the image.')); im.src = u; }); }
+// big camera photos (12–48 MP) are made smaller once, so moving them stays smooth
+function feWorkCopy(im, max = 2400) {
+  const w = im.naturalWidth || im.width, h = im.naturalHeight || im.height, k = Math.min(1, max / Math.max(w, h));
+  if (k >= 1) return im;
+  const c = document.createElement('canvas'); c.width = Math.round(w * k); c.height = Math.round(h * k);
+  const x = c.getContext('2d'); x.imageSmoothingQuality = 'high'; x.drawImage(im, 0, 0, c.width, c.height);
+  return c;
+}
 // place the floor shot where it was taken: centred, its true size and direction (from the phone's sensors)
 async function useFloorShot() {
   const it = FE.item; if (!it.floorShot) return;
-  FE.src = await loadImg(it.floorShot);
+  FE.src = feWorkCopy(await loadImg(it.floorShot));
   const m = it.floorMeta || {}, R = m.R || [1, 0, 0, 0, 1, 0, 0, 0, 1];
   const fov = (it.fov && it.fov[m.lens]) || fovs[m.lens || 'main'] || 70, L = Math.max(m.w || FE.src.width, m.h || FE.src.height);
   FE.t = { x: 0, y: 0, s: 2 * Math.tan(fov * D2R / 2) * (m.w || FE.src.width) / L * (m.crop || 1), rot: Math.atan2(R[3], R[0]) };
@@ -2617,24 +2629,46 @@ async function applyFloor() {
   toast('Floor updated.', 2500);
 }
 
-// gestures on the editor: drag = move the photo, pinch = size, twist = turn
-const feP = new Map(); let feG = null;
-feCv.addEventListener('pointerdown', e => { feCv.setPointerCapture(e.pointerId); feP.set(e.pointerId, { x: e.clientX, y: e.clientY }); feG = null; });
-feCv.addEventListener('pointermove', e => {
-  const p = feP.get(e.pointerId); if (!p || !(FE.mode === 'shot' || FE.mode === 'photo')) { if (p) { p.x = e.clientX; p.y = e.clientY; } return; }
+// gestures on the editor: drag = move the photo, pinch = size, twist = turn.
+// iPhone: touch events (with page zoom/scroll blocked); computer: mouse drag + wheel.
+const feMovable = () => (FE.mode === 'shot' || FE.mode === 'photo') && FE.src;
+let feT = null;   // touch state
+function feTouchState(ts) {
+  const r = feCv.getBoundingClientRect(), pts = [...ts].slice(0, 2).map(t => ({ x: t.clientX - r.left, y: t.clientY - r.top }));
+  if (pts.length === 1) return { n: 1, x: pts[0].x, y: pts[0].y };
+  const [a, b] = pts;
+  return { n: 2, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y), a: Math.atan2(b.y - a.y, b.x - a.x) };
+}
+function feGesture(prev, cur) {
   const k = 2 * FE.E / feCv.clientWidth;
-  if (feP.size === 1) { FE.t.x += (e.clientX - p.x) * k; FE.t.y -= (e.clientY - p.y) * k; }
-  p.x = e.clientX; p.y = e.clientY;
-  if (feP.size === 2) {
-    const [a, b] = [...feP.values()], dd = Math.hypot(a.x - b.x, a.y - b.y), an = Math.atan2(b.y - a.y, b.x - a.x);
-    if (feG) { FE.t.s = Math.max(0.05, Math.min(8, FE.t.s * dd / feG.d)); FE.t.rot -= an - feG.a; }
-    feG = { d: dd, a: an };
+  FE.t.x += (cur.x - prev.x) * k; FE.t.y -= (cur.y - prev.y) * k;
+  if (prev.n === 2 && cur.n === 2 && prev.d > 0) {
+    const sc = cur.d / prev.d, da = cur.a - prev.a;
+    // zoom and turn around the point between the two fingers
+    const px = (cur.x / feCv.clientWidth * 2 - 1) * FE.E, py = (1 - cur.y / feCv.clientWidth * 2) * FE.E;
+    let vx = FE.t.x - px, vy = FE.t.y - py; const c = Math.cos(-da), s2 = Math.sin(-da);
+    [vx, vy] = [vx * c - vy * s2, vx * s2 + vy * c];
+    FE.t.x = px + vx * sc; FE.t.y = py + vy * sc;
+    FE.t.s = Math.max(0.03, Math.min(10, FE.t.s * sc)); FE.t.rot -= da;
   }
   feChanged();
-});
-const feUp = e => { feP.delete(e.pointerId); feG = null; };
-feCv.addEventListener('pointerup', feUp); feCv.addEventListener('pointercancel', feUp);
-feCv.addEventListener('wheel', e => { e.preventDefault(); FE.t.s = Math.max(0.05, Math.min(8, FE.t.s * Math.exp(-e.deltaY * 0.001))); feChanged(); }, { passive: false });
+}
+feCv.addEventListener('touchstart', e => { e.preventDefault(); feT = feTouchState(e.touches); }, { passive: false });
+feCv.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const cur = feTouchState(e.touches);
+  if (feT && feMovable() && cur.n === feT.n) feGesture(feT, cur);
+  feT = cur;
+}, { passive: false });
+const feTouchEnd = e => { e.preventDefault(); feT = e.touches.length ? feTouchState(e.touches) : null; };
+feCv.addEventListener('touchend', feTouchEnd, { passive: false });
+feCv.addEventListener('touchcancel', feTouchEnd, { passive: false });
+['gesturestart', 'gesturechange', 'gestureend'].forEach(t => feCv.addEventListener(t, e => e.preventDefault(), { passive: false }));
+let feM = null;
+feCv.addEventListener('pointerdown', e => { if (e.pointerType !== 'mouse') return; feCv.setPointerCapture(e.pointerId); feM = feTouchState([e]); });
+feCv.addEventListener('pointermove', e => { if (e.pointerType !== 'mouse' || !feM) return; const cur = feTouchState([e]); if (feMovable()) feGesture(feM, cur); feM = cur; });
+feCv.addEventListener('pointerup', e => { if (e.pointerType === 'mouse') feM = null; });
+feCv.addEventListener('wheel', e => { e.preventDefault(); if (!feMovable()) return; FE.t.s = Math.max(0.03, Math.min(10, FE.t.s * Math.exp(-e.deltaY * 0.001))); feChanged(); }, { passive: false });
 
 document.querySelectorAll('[data-fm]').forEach(b => b.onclick = async () => {
   const m = b.dataset.fm;
@@ -2646,7 +2680,7 @@ document.querySelectorAll('[data-fm]').forEach(b => b.onclick = async () => {
 $('#fePick').onclick = () => { $('#fePhoto').value = ''; $('#fePhoto').click(); };
 $('#fePhoto').onchange = async (e) => {
   const f = e.target.files && e.target.files[0]; if (!f) return;
-  try { FE.src = await loadImg(f); } catch (err) { toast(err.message); return; }
+  try { FE.src = feWorkCopy(await loadImg(f)); } catch (err) { toast(err.message); return; }
   FE.mode = 'photo'; FE.bright = 0; FE.contrast = 0;
   FE.t = { x: 0, y: 0, s: FE.mask * 2.6, rot: 0 };      // start a bit bigger than the area to replace
   feChanged();
