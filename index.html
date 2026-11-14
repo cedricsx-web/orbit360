@@ -188,8 +188,8 @@
   </div>
   <div id="hint"><span id="hintText">Aim at the white dot</span></div>
   <div id="zoomBox" style="position:absolute;left:14px;right:14px;bottom:calc(var(--sb) + 112px);z-index:3;display:none;background:rgba(0,0,0,.6);border-radius:14px;padding:8px 12px;font-size:14px">
-    <b>Floor photo.</b> Only what's inside the orange frame is kept. Zoom in until <b>no part of the tripod</b> is inside it: <b id="zoomV">1.6×</b>
-    <input id="zoomRange" type="range" min="1" max="3.5" step="0.1" value="1.6" style="width:100%;accent-color:#4fd1c5">
+    <b>Floor photo.</b> Only what's inside the orange frame is kept. Zoom in until <b>no part of the tripod</b> is inside it: <b id="zoomV">2.0×</b>
+    <input id="zoomRange" type="range" min="1" max="3.5" step="0.1" value="2" style="width:100%;accent-color:#4fd1c5">
   </div>
   <div class="bottombar">
     <canvas id="minimap" width="300" height="150"></canvas>
@@ -294,9 +294,9 @@
   </div>
   <div id="feWrap"><canvas id="feCanvas" width="720" height="720"></canvas></div>
   <div id="fePanel">
-    <p class="feIntro">You're looking <b>down at the floor</b>, from where the camera was. The <b style="color:#ffb547">orange circle</b> is the part that gets replaced: make it cover the tripod.</p>
+    <p class="feIntro">You're looking <b>down at the floor</b>, from where the camera was. The part tinted <b style="color:#ffb547">orange</b> gets replaced: make it cover the tripod, and nothing else.</p>
 
-    <h4 class="feStep">1 · What goes in the circle?</h4>
+    <h4 class="feStep">1 · What goes in the orange area?</h4>
     <div class="seg">
       <button data-fm="shot" id="feModeShot">Floor photo</button>
       <button data-fm="photo">My photo</button>
@@ -306,12 +306,23 @@
     <p id="feModeText" class="feNote"></p>
     <input type="file" id="fePhoto" accept="image/*" hidden>
 
-    <h4 class="feStep">2 · Adjust</h4>
+    <h4 class="feStep">2 · Mark the area to replace</h4>
+    <p class="feNote">The area is tinted orange. Start from a circle, then paint or erase with your finger to follow the tripod, a wall or a corner.</p>
+    <div class="seg" style="grid-template-columns:repeat(3,1fr)">
+      <button data-ft="move">✋ Move photo</button>
+      <button data-ft="paint">🖌 Paint area</button>
+      <button data-ft="erase">⌫ Erase area</button>
+    </div>
     <p id="feHint" class="feNote" style="color:#ffb547;font-weight:600"></p>
-    <label class="field">Size of the circle: <b id="feMaskV"></b>
+    <label class="field">Brush size
+      <input id="feBrush" type="range" min="0.02" max="0.4" step="0.005"></label>
+    <label class="field">Start again from a circle of: <b id="feMaskV"></b>
       <input id="feMask" type="range" min="0.08" max="1.4" step="0.01"></label>
+    <div class="row"><button id="feUndo" class="btn small">↶ Undo</button></div>
     <label class="field">Soft edge: <b id="feFeatherV"></b>
       <input id="feFeather" type="range" min="0.05" max="0.6" step="0.01"></label>
+
+    <h4 class="feStep" id="feAdjTitle">3 · Adjust the photo</h4>
     <div id="fePhotoCtl">
       <label class="field">Photo size
         <input id="feSize" type="range" min="-2.5" max="2" step="0.01"></label>
@@ -329,7 +340,7 @@
         <input id="feText" class="txt" type="text" maxlength="40"></label>
     </div>
 
-    <h4 class="feStep">3 · Tap <span style="color:var(--accent)">Apply</span> at the top</h4>
+    <h4 class="feStep" id="feApplyTitle">4 · Tap <span style="color:var(--accent)">Apply</span> at the top</h4>
     <p class="feNote">You can come back at any time; the first version of the floor is kept.</p>
     <div class="row"><button id="feRevert" class="btn small">Restore the original floor</button></div>
   </div>
@@ -644,9 +655,9 @@ function sharpness() {
   return s2 / n - (s / n) ** 2;
 }
 let burst = null, vfcFlag = true;
-let floorZoom = parseFloat(store('floorZoom')) || 1.6;
+let floorZoom = parseFloat(store('floorZoom2')) || 2;
 $('#zoomRange').value = floorZoom; $('#zoomV').textContent = floorZoom.toFixed(1) + '×';
-$('#zoomRange').oninput = (e) => { floorZoom = +e.target.value; store('floorZoom', String(floorZoom)); $('#zoomV').textContent = floorZoom.toFixed(1) + '×'; burst = null; holdStart = 0; };
+$('#zoomRange').oninput = (e) => { floorZoom = +e.target.value; store('floorZoom2', String(floorZoom)); $('#zoomV').textContent = floorZoom.toFixed(1) + '×'; burst = null; holdStart = 0; };
 function watchFrames() {             // new camera frames (where the browser can tell us)
   if (!video.requestVideoFrameCallback) return;
   const cb = () => { vfcFlag = true; if (capturing) video.requestVideoFrameCallback(cb); };
@@ -1190,7 +1201,9 @@ function workerMain() {
         if (py <= -1 || py >= 1) continue;
         // zoomed tripod shot: full strength up to near its edges (it must fully hide the tripod in the other shots)
         const fe = f.mounted ? 1 : Math.max(0, Math.min(1, (py + 0.55) / 0.65));
-        const wt = f.mounted ? Math.min(1, (1 - Math.abs(px)) / 0.25) * Math.min(1, (1 - Math.abs(py)) / 0.25)
+        // zoomed tripod shot: only its round middle is used (the side photos keep the rest of the floor)
+        const rr = f.mounted ? Math.hypot(px * tx, py * ty) / Math.min(tx, ty) : 0;
+        const wt = f.mounted ? Math.max(0, Math.min(1, (1 - rr) / 0.3))
                              : fe * fe * (3 - 2 * fe) * (1 - px * px) * (1 - py * py);
         if (wt <= 0) continue;
         const u = (px + 1) * 0.5 * fw - 0.5, v = (1 - py) * 0.5 * fh - 0.5;
@@ -1588,7 +1601,7 @@ function workerMain() {
     const gains = lows.map(f => f.floor ? [1, 1, 1] : mGains[main.indexOf(f)]);
     let cap = opts.floorCap || 28; const floorInfo = [];
     // the zoomed shot can only replace what it sees: the patch stops just inside its edge
-    floors.forEach(ff => { if (ff.mounted) { const fp = frameParams(ff, fovs); cap = Math.atan(Math.hypot(fp.tx, fp.ty)) * 180 / PI + 4; } });   // its own edges decide where it stops
+    floors.forEach(ff => { if (ff.mounted) { const fp = frameParams(ff, fovs); cap = Math.atan(Math.min(fp.tx, fp.ty)) * 180 / PI + 4; } });   // its own round edge decides where it stops
     floors.forEach((ff, n) => {
       progress('Lining up the floor…', n / floors.length);
       const same = main.map((f, i) => f.lens === ff.lens ? mGains[i] : null).filter(Boolean);
@@ -2453,10 +2466,64 @@ function floorView(N, E) {
   return c;
 }
 // the replacement layer (photo / blur / colour), already masked, as an N×N canvas covering [-E, E]
+/* The area to replace: a mask painted on the floor, stored in a 1024×1024 canvas covering ±EM camera heights. */
+const EM = 1.6, MN = 1024;
+FE.mk = document.createElement('canvas'); FE.mk.width = FE.mk.height = MN;
+FE.tool = 'move'; FE.brush = 0.08; FE.undo = [];
+let feSoftCache = null, feTintCache = null, feMaskInfo = null;
+const mkCtx = FE.mk.getContext('2d', { willReadFrequently: true });
+function feMaskChanged() { feSoftCache = null; feTintCache = null; feMaskInfo = null; feLayerDirty = true; }
+function fePushUndo() { FE.undo.push(mkCtx.getImageData(0, 0, MN, MN)); if (FE.undo.length > 15) FE.undo.shift(); }
+function feMaskCircle(r) {
+  mkCtx.setTransform(1, 0, 0, 1, 0, 0); mkCtx.clearRect(0, 0, MN, MN);
+  mkCtx.fillStyle = '#fff'; mkCtx.beginPath(); mkCtx.arc(MN / 2, MN / 2, r / EM * MN / 2, 0, Math.PI * 2); mkCtx.fill();
+  feMaskChanged();
+}
+function feMaskStroke(a, b, erase) {   // a, b: floor points
+  const k = MN / (2 * EM), P = (p) => [(p[0] / EM + 1) / 2 * MN, (1 - p[1] / EM) / 2 * MN];
+  mkCtx.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
+  mkCtx.strokeStyle = '#fff'; mkCtx.lineCap = 'round'; mkCtx.lineWidth = FE.brush * 2 * k;
+  const A = P(a), B = P(b);
+  mkCtx.beginPath(); mkCtx.moveTo(A[0], A[1]); mkCtx.lineTo(B[0] + 0.01, B[1]); mkCtx.stroke();
+  mkCtx.globalCompositeOperation = 'source-over';
+  feMaskChanged();
+}
+// size, centre and extent of the area (for zooming the view, matching brightness and placing text)
+function feMaskStats() {
+  if (feMaskInfo) return feMaskInfo;
+  const d = mkCtx.getImageData(0, 0, MN, MN).data; let n = 0, sx = 0, sy = 0, ext = 0;
+  for (let j = 0; j < MN; j += 2) for (let i = 0; i < MN; i += 2) if (d[(j * MN + i) * 4 + 3] > 127) {
+    const X = ((i + 0.5) / MN * 2 - 1) * EM, Y = (1 - (j + 0.5) / MN * 2) * EM; n++; sx += X; sy += Y; ext = Math.max(ext, Math.abs(X), Math.abs(Y)); }
+  const cell = (2 * EM / MN * 2) ** 2;
+  feMaskInfo = { area: n * cell, cx: n ? sx / n : 0, cy: n ? sy / n : 0, ext: n ? ext : 0, data: d };
+  return feMaskInfo;
+}
+// the area with a soft edge going outward (blurred), cached
+function feSoftMask() {
+  if (feSoftCache) return feSoftCache;
+  const rad = Math.max(1, Math.round(FE.feather * 0.3 / (2 * EM) * MN)), d = mkCtx.getImageData(0, 0, MN, MN);
+  const a = new Float32Array(MN * MN); for (let p = 0; p < MN * MN; p++) a[p] = d.data[p * 4 + 3];
+  const tmp = new Float32Array(MN * MN);
+  for (let pass = 0; pass < 2; pass++) {
+    for (let y = 0; y < MN; y++) { let acc = 0; const row = y * MN;
+      for (let x = -rad; x < MN; x++) { if (x + rad < MN) acc += a[row + x + rad]; if (x - rad - 1 >= 0) acc -= a[row + x - rad - 1]; if (x >= 0) tmp[row + x] = acc / (2 * rad + 1); } }
+    for (let x = 0; x < MN; x++) { let acc = 0;
+      for (let y = -rad; y < MN; y++) { if (y + rad < MN) acc += tmp[(y + rad) * MN + x]; if (y - rad - 1 >= 0) acc -= tmp[(y - rad - 1) * MN + x]; if (y >= 0) a[y * MN + x] = acc / (2 * rad + 1); } }
+  }
+  // the painted area stays fully replaced; the softness fades outward
+  for (let p = 0; p < MN * MN; p++) { const v = Math.max(d.data[p * 4 + 3], Math.min(255, a[p] * 2)); d.data[p * 4] = d.data[p * 4 + 1] = d.data[p * 4 + 2] = 255; d.data[p * 4 + 3] = v; }
+  const c = document.createElement('canvas'); c.width = c.height = MN; c.getContext('2d').putImageData(d, 0, 0);
+  return (feSoftCache = c);
+}
+// draw a mask canvas (covering ±EM) into a view canvas covering ±E
+function feDrawMaskInto(ctx, N, E, m) {
+  const sz = EM / E * N, off = (N - sz) / 2;
+  ctx.drawImage(m, off, off, sz, sz);
+}
 function buildLayer(N, E, bgCanvas) {
   const c = document.createElement('canvas'); c.width = c.height = N;
   const ctx = c.getContext('2d');
-  const k = N / (2 * E);
+  const k = N / (2 * E), mi = feMaskStats();
   if (FE.mode === 'shot' || FE.mode === 'photo') {
     if (FE.src) {
       ctx.setTransform(k, 0, 0, -k, N / 2, N / 2);                  // floor units, Y up
@@ -2474,27 +2541,29 @@ function buildLayer(N, E, bgCanvas) {
   } else if (FE.mode === 'color') {
     ctx.fillStyle = FE.color; ctx.fillRect(0, 0, N, N);
     if (FE.text) {
+      const r = Math.sqrt(mi.area / Math.PI) || 0.3, cx = (mi.cx / E + 1) / 2 * N, cy = (1 - mi.cy / E) / 2 * N;
       ctx.fillStyle = 'rgba(255,255,255,.92)'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-      let fs = FE.mask * k * 0.5; ctx.font = `600 ${fs}px -apple-system, Helvetica, Arial, sans-serif`;
-      const tw = ctx.measureText(FE.text).width, maxw = FE.mask * k * 1.5;
+      let fs = r * k * 0.5; ctx.font = `600 ${fs}px -apple-system, Helvetica, Arial, sans-serif`;
+      const tw = ctx.measureText(FE.text).width, maxw = r * k * 1.5;
       if (tw > maxw) { fs *= maxw / tw; ctx.font = `600 ${fs}px -apple-system, Helvetica, Arial, sans-serif`; }
-      ctx.fillText(FE.text, N / 2, N / 2);
+      ctx.fillText(FE.text, cx, cy);
     }
   } else if (FE.mode === 'blur') {
-    // fill the circle from the floor around it (smooth blend of the surroundings)
-    const b = bgCanvas.getContext('2d').getImageData(0, 0, N, N), d = b.data;
+    // fill the area from the floor around it (smooth blend of the surroundings)
+    const b = bgCanvas.getContext('2d').getImageData(0, 0, N, N), d = b.data, md = mi.data;
     for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
       const X = ((i + 0.5) / N * 2 - 1) * E, Y = (1 - (j + 0.5) / N * 2) * E;
-      if (Math.hypot(X, Y) < FE.mask * 1.03) d[(j * N + i) * 4 + 3] = 0;
+      const a = Math.floor((X / EM + 1) / 2 * MN), bb = Math.floor((1 - Y / EM) / 2 * MN);
+      if (a >= 0 && bb >= 0 && a < MN && bb < MN && md[(bb * MN + a) * 4 + 3] > 40) d[(j * N + i) * 4 + 3] = 0;
     }
     pushPullFill(d, N, N);
     ctx.putImageData(b, 0, 0);
   }
-  // round mask with a soft edge
-  const r1 = FE.mask * k, r0 = Math.max(0, r1 * (1 - FE.feather));
-  const g = ctx.createRadialGradient(N / 2, N / 2, r0, N / 2, N / 2, Math.max(r0 + 0.5, r1));
-  g.addColorStop(0, 'rgba(0,0,0,1)'); g.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.globalCompositeOperation = 'destination-in'; ctx.fillStyle = g; ctx.fillRect(0, 0, N, N);
+  // keep only the marked area, with its soft edge
+  const keep = document.createElement('canvas'); keep.width = keep.height = N;
+  feDrawMaskInto(keep.getContext('2d'), N, E, feSoftMask());
+  ctx.globalCompositeOperation = 'destination-in';
+  ctx.drawImage(keep, 0, 0);
   ctx.globalCompositeOperation = 'source-over';
   return c;
 }
@@ -2535,16 +2604,26 @@ function feDraw() {
     feCtx.drawImage(FE.bg, 0, 0);
     if (feLayerDirty || !feLayer) { feLayer = buildLayer(N, FE.E, FE.bg); feLayerDirty = false; }
     feCtx.drawImage(feLayer, 0, 0);
-    const k = N / (2 * FE.E);
-    feCtx.save(); feCtx.setLineDash([10, 8]); feCtx.lineWidth = 3; feCtx.strokeStyle = '#ffb547';
-    feCtx.beginPath(); feCtx.arc(N / 2, N / 2, FE.mask * k, 0, Math.PI * 2); feCtx.stroke();
-    feCtx.setLineDash([]); feCtx.lineWidth = 1.5; feCtx.strokeStyle = 'rgba(255,255,255,.6)';
+    if (!feTintCache) {                       // the marked area, tinted orange
+      feTintCache = document.createElement('canvas'); feTintCache.width = feTintCache.height = MN;
+      const t = feTintCache.getContext('2d'); t.drawImage(FE.mk, 0, 0);
+      t.globalCompositeOperation = 'source-in'; t.fillStyle = 'rgba(255,170,40,.32)'; t.fillRect(0, 0, MN, MN);
+    }
+    feDrawMaskInto(feCtx, N, FE.E, feTintCache);
+    feCtx.save(); feCtx.lineWidth = 1.5; feCtx.strokeStyle = 'rgba(255,255,255,.6)';
     feCtx.beginPath(); feCtx.moveTo(N / 2 - 10, N / 2); feCtx.lineTo(N / 2 + 10, N / 2); feCtx.moveTo(N / 2, N / 2 - 10); feCtx.lineTo(N / 2, N / 2 + 10); feCtx.stroke();
     feCtx.restore();
   });
 }
 function feSync() {
   $('#feMask').value = FE.mask; $('#feMaskV').textContent = Math.round(Math.atan(FE.mask) * R2D) + '°';
+  $('#feBrush').value = FE.brush;
+  document.querySelectorAll('[data-ft]').forEach(b => { b.classList.toggle('on', b.dataset.ft === FE.tool); });
+  document.querySelector('[data-ft=move]').disabled = !feMovable();
+  $('#feUndo').disabled = !FE.undo.length;
+  const photoMode = FE.mode === 'shot' || FE.mode === 'photo';
+  $('#feAdjTitle').style.display = photoMode ? '' : 'none';
+  $('#feApplyTitle').firstChild.textContent = (photoMode ? '4' : '3') + ' · Tap ';
   $('#feFeather').value = FE.feather; $('#feFeatherV').textContent = Math.round(FE.feather * 100) + '%';
   $('#feSize').value = Math.log(FE.t.s); $('#feRot').value = Math.round(wrapDeg(FE.t.rot * R2D) * 2) / 2; $('#feRotV').textContent = Math.round(wrapDeg(FE.t.rot * R2D)) + '°';
   $('#feBright').value = FE.bright; $('#feContrast').value = FE.contrast;
@@ -2554,20 +2633,23 @@ function feSync() {
   $('#feColorCtl').style.display = FE.mode === 'color' ? '' : 'none';
   $('#feRevert').style.display = FE.item.original ? '' : 'none';
   $('#feModeText').textContent = {
-    shot: FE.item.floorShot ? 'The photo of the floor taken at the end of the capture, already placed. Line it up so the floor pattern continues across the circle edge.' : '',
-    photo: FE.src ? 'Your photo. Line it up so the floor pattern continues across the circle edge.'
+    shot: FE.item.floorShot ? 'The zoomed photo of the floor taken at the end of the capture, already placed. Line it up so the floor pattern continues across the edge of the orange area.' : '',
+    photo: FE.src ? 'Your photo. Line it up so the floor pattern continues across the edge of the orange area.'
                   : 'Any photo of a floor from your library, for example a close-up of the same tiles, carpet or wood taken elsewhere in the room.',
-    blur: 'Fills the circle with a blur of the floor around it. Quick, and fine on plain floors.',
-    color: 'A plain disc, with your text if you like (a logo name, for example).'
+    blur: 'Fills the orange area with a blur of the floor around it. Quick, and fine on plain floors.',
+    color: 'A plain colour, with your text if you like (a logo name, for example).'
   }[FE.mode] + (!FE.item.floorShot && FE.mode !== 'shot' ? ' (“Floor photo” is only available for spheres taken on a tripod with the latest version: it is the last, zoomed-in shot of the capture.)' : '');
-  $('#feHint').textContent = feMovable() ? 'Move: drag with one finger · Zoom: pinch · Turn: twist with two fingers'
+  $('#feHint').textContent = FE.tool === 'paint' ? 'Paint over everything to replace (tripod legs, feet…)'
+    : FE.tool === 'erase' ? 'Erase where the floor is already good (and over walls)'
+    : feMovable() ? 'Move: drag with one finger · Zoom: pinch · Turn: twist with two fingers'
     : (FE.mode === 'photo' || FE.mode === 'shot') ? 'Choose a photo first.' : '';
   $('#feHint').style.display = $('#feHint').textContent ? '' : 'none';
 }
 const feChanged = () => { feLayerDirty = true; feSync(); feDraw(); };
 // the view shows about 3× the circle, so the tripod area is big enough to work on
 function feZoomView() {
-  const E = Math.max(0.35, Math.min(1.7, FE.mask * 3));
+  const ext = feMaskStats().ext || FE.mask;
+  const E = Math.max(0.35, Math.min(EM, ext * 2.4));
   if (FE.bg && Math.abs(E - FE.E) / FE.E < 0.15) return;
   FE.E = E; FE.bg = floorView(feCv.width, FE.E); feLayerDirty = true;
 }
@@ -2589,7 +2671,8 @@ async function useFloorShot() {
   const fov = (it.fov && it.fov[m.lens]) || fovs[m.lens || 'main'] || 70, L = Math.max(m.w || FE.src.width, m.h || FE.src.height);
   FE.t = { x: 0, y: 0, s: 2 * Math.tan(fov * D2R / 2) * (m.w || FE.src.width) / L * (m.crop || 1), rot: Math.atan2(R[3], R[0]) };
   FE.mode = 'shot'; FE.bright = 0; FE.contrast = 0;
-  FE.mask = Math.min(FE.mask, FE.t.s * 0.45);
+  const inner = FE.t.s * Math.min(1, (m.h || FE.src.height) / (m.w || FE.src.width)) / 2;   // radius of the photo's round middle
+  FE.mask = Math.min(FE.mask, inner * 0.85);
 }
 
 async function openFloorEditor(item) {
@@ -2601,8 +2684,11 @@ async function openFloorEditor(item) {
   c.getContext('2d').drawImage(im, 0, 0);
   FE.eq = c.getContext('2d').getImageData(0, 0, c.width, c.height); FE.W = c.width; FE.H = c.height;
   FE.mask = 0.45; FE.feather = 0.25; FE.src = null; FE.mode = 'blur'; FE.bright = 0; FE.contrast = 0; FE.t = { x: 0, y: 0, s: 1, rot: 0 };
-  if (item.floorShot) { await useFloorShot(); FE.mask = Math.max(FE.mask, 0.3); }
-  feZoomView();
+  FE.tool = 'move'; FE.undo = [];
+  if (item.floorShot) await useFloorShot();
+  else FE.tool = 'paint';
+  feMaskCircle(FE.mask);
+  FE.bg = null; feZoomView();
   if (viewer) viewer.stop();
   show('floorEd'); feChanged();
 }
@@ -2611,7 +2697,9 @@ async function applyFloor() {
   const it = FE.item, W = FE.W, H = FE.H;
   toast('Applying…', 4000);
   await new Promise(r => setTimeout(r, 30));
-  const Er = FE.mask * 1.02, N = 2048;
+  const mi = feMaskStats();
+  if (!mi.area) { toast('Mark the area to replace first (paint over the tripod).', 3500); return; }
+  const Er = Math.min(EM, mi.ext + FE.feather * 0.3 + 0.02), N = 2048;
   const bgR = FE.mode === 'blur' ? floorView(N, Er) : null;
   const lay = buildLayer(N, Er, bgR).getContext('2d').getImageData(0, 0, N, N).data;
   const out = new ImageData(new Uint8ClampedArray(FE.eq.data), W, H), d = out.data;
@@ -2663,6 +2751,8 @@ function feTouchState(ts) {
   const [a, b] = pts;
   return { n: 2, x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, d: Math.hypot(a.x - b.x, a.y - b.y), a: Math.atan2(b.y - a.y, b.x - a.x) };
 }
+const feFloorPt = (p) => [(p.x / feCv.clientWidth * 2 - 1) * FE.E, (1 - p.y / feCv.clientWidth * 2) * FE.E];
+function fePaint(prev, cur) { feMaskStroke(feFloorPt(prev), feFloorPt(cur), FE.tool === 'erase'); feChanged(); }
 function feGesture(prev, cur) {
   const k = 2 * FE.E / feCv.clientWidth;
   FE.t.x += (cur.x - prev.x) * k; FE.t.y -= (cur.y - prev.y) * k;
@@ -2677,11 +2767,18 @@ function feGesture(prev, cur) {
   }
   feChanged();
 }
-feCv.addEventListener('touchstart', e => { e.preventDefault(); feT = feTouchState(e.touches); }, { passive: false });
+const fePainting = () => FE.tool === 'paint' || FE.tool === 'erase';
+feCv.addEventListener('touchstart', e => {
+  e.preventDefault(); feT = feTouchState(e.touches);
+  if (fePainting() && feT.n === 1) { fePushUndo(); fePaint(feT, feT); }
+}, { passive: false });
 feCv.addEventListener('touchmove', e => {
   e.preventDefault();
   const cur = feTouchState(e.touches);
-  if (feT && feMovable() && cur.n === feT.n) feGesture(feT, cur);
+  if (feT && cur.n === feT.n) {
+    if (fePainting()) { if (cur.n === 1) fePaint(feT, cur); }
+    else if (feMovable()) feGesture(feT, cur);
+  }
   feT = cur;
 }, { passive: false });
 const feTouchEnd = e => { e.preventDefault(); feT = e.touches.length ? feTouchState(e.touches) : null; };
@@ -2689,29 +2786,34 @@ feCv.addEventListener('touchend', feTouchEnd, { passive: false });
 feCv.addEventListener('touchcancel', feTouchEnd, { passive: false });
 ['gesturestart', 'gesturechange', 'gestureend'].forEach(t => feCv.addEventListener(t, e => e.preventDefault(), { passive: false }));
 let feM = null;
-feCv.addEventListener('pointerdown', e => { if (e.pointerType !== 'mouse') return; feCv.setPointerCapture(e.pointerId); feM = feTouchState([e]); });
-feCv.addEventListener('pointermove', e => { if (e.pointerType !== 'mouse' || !feM) return; const cur = feTouchState([e]); if (feMovable()) feGesture(feM, cur); feM = cur; });
+feCv.addEventListener('pointerdown', e => { if (e.pointerType !== 'mouse') return; feCv.setPointerCapture(e.pointerId); feM = feTouchState([e]); if (fePainting()) { fePushUndo(); fePaint(feM, feM); } });
+feCv.addEventListener('pointermove', e => { if (e.pointerType !== 'mouse' || !feM) return; const cur = feTouchState([e]); if (fePainting()) fePaint(feM, cur); else if (feMovable()) feGesture(feM, cur); feM = cur; });
 feCv.addEventListener('pointerup', e => { if (e.pointerType === 'mouse') feM = null; });
 feCv.addEventListener('wheel', e => { e.preventDefault(); if (!feMovable()) return; FE.t.s = Math.max(0.03, Math.min(10, FE.t.s * Math.exp(-e.deltaY * 0.001))); feChanged(); }, { passive: false });
 
 document.querySelectorAll('[data-fm]').forEach(b => b.onclick = async () => {
   const m = b.dataset.fm;
-  if (m === 'shot') { await useFloorShot(); }
+  if (m === 'shot') { await useFloorShot(); FE.tool = 'move'; }
   else if (m === 'photo') { if (FE.mode !== 'photo' || !FE.src) { $('#fePhoto').value = ''; $('#fePhoto').click(); return; } }
-  else FE.mode = m;
+  else { FE.mode = m; if (FE.tool === 'move') FE.tool = 'paint'; }
   feChanged();
 });
 $('#fePick').onclick = () => { $('#fePhoto').value = ''; $('#fePhoto').click(); };
 $('#fePhoto').onchange = async (e) => {
   const f = e.target.files && e.target.files[0]; if (!f) return;
   try { FE.src = feWorkCopy(await loadImg(f)); } catch (err) { toast(err.message); return; }
-  FE.mode = 'photo'; FE.bright = 0; FE.contrast = 0;
-  FE.t = { x: 0, y: 0, s: FE.mask * 2.6, rot: 0 };      // start a bit bigger than the area to replace
+  FE.mode = 'photo'; FE.bright = 0; FE.contrast = 0; FE.tool = 'move';
+  const mi = feMaskStats();
+  FE.t = { x: mi.cx, y: mi.cy, s: Math.max(0.2, (mi.ext || FE.mask) * 2.6), rot: 0 };      // a bit bigger than the area to replace
   feChanged();
 };
-$('#feMask').oninput = e => { FE.mask = +e.target.value; feChanged(); };
-$('#feMask').onchange = () => { feZoomView(); feChanged(); };
-$('#feFeather').oninput = e => { FE.feather = +e.target.value; feChanged(); };
+$('#feMask').onpointerdown = $('#feMask').ontouchstart = () => { if (!FE._circleUndo) { fePushUndo(); FE._circleUndo = true; } };
+$('#feMask').oninput = e => { FE.mask = +e.target.value; feMaskCircle(FE.mask); feChanged(); };
+$('#feMask').onchange = () => { FE._circleUndo = false; feZoomView(); feChanged(); };
+$('#feBrush').oninput = e => { FE.brush = +e.target.value; };
+document.querySelectorAll('[data-ft]').forEach(b => b.onclick = () => { FE.tool = b.dataset.ft; feChanged(); });
+$('#feUndo').onclick = () => { const u = FE.undo.pop(); if (!u) return; mkCtx.putImageData(u, 0, 0); feMaskChanged(); feChanged(); };
+$('#feFeather').oninput = e => { FE.feather = +e.target.value; feSoftCache = null; feChanged(); };
 $('#feSize').oninput = e => { FE.t.s = Math.exp(+e.target.value); feChanged(); };
 $('#feRot').oninput = e => { FE.t.rot = +e.target.value * D2R; feChanged(); };
 $('#feBright').oninput = e => { FE.bright = +e.target.value; feChanged(); };
@@ -2721,21 +2823,29 @@ $('#feText').oninput = e => { FE.text = e.target.value; feChanged(); };
 // match brightness/contrast of the photo to the floor just outside the circle
 $('#feAuto').onclick = () => {
   if (!FE.src) return;
-  const N = feCv.width, k = N / (2 * FE.E), keep = [FE.bright, FE.contrast];
+  const N = feCv.width, keep = [FE.bright, FE.contrast], mi = feMaskStats();
   FE.bright = 0; FE.contrast = 0;
   const L = buildLayerUnmasked(N), bg = FE.bg.getContext('2d').getImageData(0, 0, N, N).data;
-  const stats = (d, r0, r1, needAlpha) => { let s = 0, s2 = 0, n = 0;
+  const req = Math.sqrt(mi.area / Math.PI) || FE.mask;
+  const inMask = (i, j) => { const X = ((i + 0.5) / N * 2 - 1) * FE.E, Y = (1 - (j + 0.5) / N * 2) * FE.E;
+    const a = Math.floor((X / EM + 1) / 2 * MN), b = Math.floor((1 - Y / EM) / 2 * MN);
+    return a >= 0 && b >= 0 && a < MN && b < MN && mi.data[(b * MN + a) * 4 + 3] > 127; };
+  // floor just around the area (outside it) vs. the photo inside it
+  const stats = (d, want, needAlpha) => { let s = 0, s2 = 0, n = 0;
     for (let j = 0; j < N; j += 2) for (let i = 0; i < N; i += 2) {
-      const r = Math.hypot(i - N / 2, j - N / 2) / k; if (r < r0 || r > r1) continue;
+      const X = ((i + 0.5) / N * 2 - 1) * FE.E, Y = (1 - (j + 0.5) / N * 2) * FE.E, r = Math.hypot(X - mi.cx, Y - mi.cy);
+      const inside = inMask(i, j);
+      if (want === 'band' ? (inside || r > req * 1.7) : !inside) continue;
       const q = (j * N + i) * 4; if (needAlpha && d[q + 3] < 250) continue;
       const l = 0.299 * d[q] + 0.587 * d[q + 1] + 0.114 * d[q + 2]; s += l; s2 += l * l; n++; }
     return n > 50 ? { m: s / n, sd: Math.sqrt(Math.max(1, s2 / n - (s / n) ** 2)) } : null; };
-  const a = stats(bg, FE.mask * 1.05, FE.mask * 1.5, false), b = stats(L, FE.mask * 0.5, FE.mask * 1.0, true);
-  if (!a || !b) { FE.bright = keep[0]; FE.contrast = keep[1]; toast('Make the photo cover the circle first.'); return; }
+  const a = stats(bg, 'band', false), b = stats(L, 'inside', true);
+  if (!a || !b) { FE.bright = keep[0]; FE.contrast = keep[1]; toast('Make the photo cover the orange area first.'); return; }
   const cf = Math.max(0.4, Math.min(1.8, a.sd / b.sd));
   FE.contrast = cf - 1; FE.bright = Math.max(-80, Math.min(80, a.m - ((b.m - 128) * cf + 128)));
   feChanged();
 };
+
 function buildLayerUnmasked(N) {
   const c = document.createElement('canvas'); c.width = c.height = N; const ctx = c.getContext('2d'), k = N / (2 * FE.E);
   ctx.setTransform(k, 0, 0, -k, N / 2, N / 2); ctx.translate(FE.t.x, FE.t.y); ctx.rotate(FE.t.rot); ctx.scale(1, -1);
