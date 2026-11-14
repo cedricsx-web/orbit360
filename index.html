@@ -105,6 +105,9 @@
   .seg button.on { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
   .seg button:disabled { opacity: .35; }
   #fePanel label.field { margin: 6px 0; }
+  .feIntro { margin: 4px 0 6px; font-size: 14px; color: #c9d0dc; }
+  .feStep { margin: 14px 0 6px; font-size: 15px; }
+  .feNote { margin: 2px 0 6px; font-size: 13px; color: #c9d0dc; }
   .lensbtn.on { background: var(--accent); color: var(--accent-ink); border-color: transparent; }
   .modal .sheet { position: relative; left: auto; right: auto; bottom: auto; margin: 12px; margin-bottom: calc(var(--sb) + 12px); width: 100%; max-height: calc(100% - var(--st) - var(--sb) - 40px); overflow-y: auto; -webkit-overflow-scrolling: touch; }
 
@@ -185,7 +188,7 @@
   </div>
   <div id="hint"><span id="hintText">Aim at the white dot</span></div>
   <div id="zoomBox" style="position:absolute;left:14px;right:14px;bottom:calc(var(--sb) + 112px);z-index:3;display:none;background:rgba(0,0,0,.6);border-radius:14px;padding:8px 12px;font-size:14px">
-    Zoom until the tripod feet are outside the bright frame: <b id="zoomV">1.6×</b>
+    <b>Floor photo.</b> Only what's inside the orange frame is kept. Zoom in until <b>no part of the tripod</b> is inside it: <b id="zoomV">1.6×</b>
     <input id="zoomRange" type="range" min="1" max="3.5" step="0.1" value="1.6" style="width:100%;accent-color:#4fd1c5">
   </div>
   <div class="bottombar">
@@ -291,35 +294,43 @@
   </div>
   <div id="feWrap"><canvas id="feCanvas" width="720" height="720"></canvas></div>
   <div id="fePanel">
-    <p style="margin:4px 0 4px;font-size:13px;color:#c9d0dc">The floor seen from above, centred under the camera. The dashed circle is the area that gets replaced.</p>
-    <p id="feHint" style="margin:0 0 8px;font-size:13px;font-weight:600;color:#ffb547"></p>
+    <p class="feIntro">You're looking <b>down at the floor</b>, from where the camera was. The <b style="color:#ffb547">orange circle</b> is the part that gets replaced: make it cover the tripod.</p>
+
+    <h4 class="feStep">1 · What goes in the circle?</h4>
     <div class="seg">
-      <button data-fm="shot" id="feModeShot">Floor shot</button>
-      <button data-fm="photo">Other photo</button>
+      <button data-fm="shot" id="feModeShot">Floor photo</button>
+      <button data-fm="photo">My photo</button>
       <button data-fm="blur">Blur</button>
       <button data-fm="color">Colour</button>
     </div>
+    <p id="feModeText" class="feNote"></p>
     <input type="file" id="fePhoto" accept="image/*" hidden>
-    <label class="field">Area to replace: <b id="feMaskV"></b>
+
+    <h4 class="feStep">2 · Adjust</h4>
+    <p id="feHint" class="feNote" style="color:#ffb547;font-weight:600"></p>
+    <label class="field">Size of the circle: <b id="feMaskV"></b>
       <input id="feMask" type="range" min="0.08" max="1.4" step="0.01"></label>
     <label class="field">Soft edge: <b id="feFeatherV"></b>
       <input id="feFeather" type="range" min="0.05" max="0.6" step="0.01"></label>
     <div id="fePhotoCtl">
       <label class="field">Photo size
         <input id="feSize" type="range" min="-2.5" max="2" step="0.01"></label>
-      <label class="field">Turn: <b id="feRotV"></b>
+      <label class="field">Turn the photo: <b id="feRotV"></b>
         <input id="feRot" type="range" min="-180" max="180" step="0.5"></label>
       <label class="field">Brightness
         <input id="feBright" type="range" min="-80" max="80" step="1"></label>
       <label class="field">Contrast
         <input id="feContrast" type="range" min="-0.6" max="0.8" step="0.01"></label>
-      <div class="row"><button id="feAuto" class="btn small">Match the surrounding floor</button><button id="fePick" class="btn small">Choose a photo…</button></div>
+      <div class="row"><button id="feAuto" class="btn small">Match brightness to the floor around</button><button id="fePick" class="btn small">Use another photo…</button></div>
     </div>
     <div id="feColorCtl" style="display:none">
       <label class="field">Colour <input id="feColor" type="color" value="#7a7066" style="width:100%;height:40px;border:0;background:none"></label>
       <label class="field">Text in the middle (optional, e.g. your logo name)
         <input id="feText" class="txt" type="text" maxlength="40"></label>
     </div>
+
+    <h4 class="feStep">3 · Tap <span style="color:var(--accent)">Apply</span> at the top</h4>
+    <p class="feNote">You can come back at any time; the first version of the floor is kept.</p>
     <div class="row"><button id="feRevert" class="btn small">Restore the original floor</button></div>
   </div>
 </section>
@@ -678,9 +689,10 @@ function makeTargets(lensKey, onTripod, downMain) {
   // straight down: on a tripod that would only show the tripod, so the hand-held floor photo does it instead
   if (gd.fov / 2 + 45 < 96 && !onTripod) t.push({ yaw: 0, pitch: -90 });
   const out = t.map(o => ({ ...o, dir: dirFrom(o.yaw * D2R, o.pitch * D2R), done: false, cam: camFor(o.pitch) }));
-  // When the phone lies flat for the ceiling (front camera), the back camera looks straight at the floor:
-  // a zoomed-in shot from there sees the floor between the tripod feet, and the feet stay out of frame.
-  if (onTripod === 'ceil') out.push({ yaw: 0, pitch: -90, dir: [0, 0, -1], done: false, cam: 'main', floor: true, zoomFloor: true });
+  // Last shot on a tripod: the floor, straight down and zoomed in, from the tripod itself, so the tripod feet
+  // stay out of frame. 'ceil': phone lying flat, back camera looks down. 'floor': phone pointing straight up,
+  // front camera looks down.
+  if (onTripod) out.push({ yaw: 0, pitch: -90, dir: [0, 0, -1], done: false, cam: onTripod === 'ceil' ? 'main' : 'front', floor: true, zoomFloor: true });
   return out;
 }
 // with more than one camera in the plan, each shot waits for its own camera
@@ -697,14 +709,14 @@ function offerFloor() {
   floorStep = 0;
   const n = floorCount();
   if (n >= 2) { finishCapture(); return; }
-  $('#floorTitle').textContent = n ? 'Floor photo taken' : 'Last step: the floor, without the tripod';
+  $('#floorTitle').textContent = n ? 'Floor photo taken' : 'Last step: a photo of the floor';
   $('#floorText').textContent = n
-    ? 'For a cleaner floor, take one more from the OPPOSITE side of the spot, so your feet are somewhere else (optional).'
-    : 'Take the tripod away. Stand beside the spot where it was, hold the phone out over that spot at about the same height, camera pointing straight down. Keep your feet at the bottom of the screen.';
+    ? 'Optional: take one more from the other side of the spot. Your feet will be somewhere else, so the floor comes out cleaner.'
+    : '1. Move the tripod out of the way. 2. Stand next to the spot where it was. 3. Hold the phone over that spot, at about the same height, camera pointing straight down; keep your feet at the bottom of the screen.';
   $('#btnFloorGo').textContent = n ? 'Take one more' : 'Take the floor photo';
-  $('#btnFloorSkip').textContent = n ? 'Stitch now' : 'Skip (keep the tripod in the picture)';
+  $('#btnFloorSkip').textContent = n ? 'Stitch now' : 'Skip (you can fix the floor later with “Floor”)';
   $('#floorSheet').style.display = 'block';
-  $('#hintText').textContent = n ? 'Floor photo taken' : 'Remove the tripod';
+  $('#hintText').textContent = n ? 'Floor photo taken' : 'Move the tripod out of the way';
 }
 $('#btnFloorGo').onclick = async () => {
   $('#floorSheet').style.display = 'none';
@@ -763,8 +775,9 @@ function updateCamUI() {
   $('#planText').textContent = `${t.length} shots` + (parts.length > 1 ? ': ' + parts.join(', ') + '.' : '.') +
     (tripod === 'ceil' ? ' The front camera photographs the ceiling while you tilt the phone down.'
      : tripod === 'floor' ? ' The front camera photographs the floor while you tilt the phone up.' : '') +
-    (tripod === 'ceil' ? ' The floor is one zoomed-in shot straight down, from the same position, so the tripod feet stay out.'
-     : tripod ? ' At the end, remove the tripod for one hand-held floor photo.' : '') +
+    (tripod === 'ceil' ? ' Last shot: the floor, with the phone lying flat and zoomed in so the tripod stays out of the picture.'
+     : tripod ? ' Last shot: the floor, with the phone pointing straight up and zoomed in so the tripod stays out of the picture.' : '') +
+    (tripod ? ' Everything is taken from the tripod: never move it during the capture.' : '') +
     (video.videoWidth ? ` Camera: ${video.videoWidth}×${video.videoHeight}` + (Math.max(video.videoWidth, video.videoHeight) < 1280 ? ' (low: shots will be soft)' : '') + '.' : '');
 }
 
@@ -920,7 +933,10 @@ function tick(now) {
     }
     $('#hintText').textContent = hintFor(best, f, aligned, still);
     $('#zoomBox').style.display = best.zoomFloor ? 'block' : 'none';
-    if (best.floor) $('#hintText').textContent = aligned ? (still ? 'Hold…' : 'Hold still…') : 'Point the phone straight down over the spot where the tripod stood';
+    if (best.zoomFloor) $('#hintText').textContent = burst ? 'Taking the floor photo…' : aligned ? (still ? 'Hold…' : 'Let go of the phone: waiting for it to stop moving…')
+      : (best.cam === 'front' ? 'Last shot: the floor. Point the phone straight up on the tripod (the front camera looks down)'
+                               : 'Last shot: the floor. Lay the phone flat, screen up, on the tripod');
+    else if (best.floor) $('#hintText').textContent = aligned ? (still ? 'Hold…' : 'Hold still…') : 'Point the camera straight down at the spot where the tripod was';
   } else if (yaw0 !== null && multiCam() && targets.some(t => !t.done)) promptSwitch();
   drawMinimap(f);
 }
@@ -959,7 +975,8 @@ $('#tripodSel').onchange = (e) => { tripod = e.target.value; store('tripod', tri
 
 function hintFor(t, f, aligned, still) {
   if (burst) return 'Taking the sharpest shot…';
-  if (t.zoomFloor && !aligned) return 'Floor: lay the phone flat (screen up) so the back camera looks straight down';
+  if (t.zoomFloor && !aligned) return t.cam === 'front' ? 'Last shot: the floor. Point the phone straight up on the tripod (the front camera looks down)'
+                                                       : 'Last shot: the floor. Lay the phone flat, screen up, on the tripod';
   if (aligned && !still) return tripod ? 'Let go of the phone: waiting for the shake to stop…' : 'Hold still… the phone is still moving a little';
   if (aligned) return 'Hold…';
   if (curCam === 'front') {
@@ -1022,7 +1039,7 @@ function takeShot(target, R, img) {
   requestAnimationFrame(() => { fl.style.transition = 'opacity .3s'; fl.style.opacity = '0'; });
   updateCount();
   if (target.floor && !target.zoomFloor) { floorStep = 0; setTimeout(offerFloor, 300); return; }
-  if (targets.every(t => t.done)) setTimeout(() => { $('#zoomBox').style.display = 'none'; if (tripod === 'floor') offerFloor(); else finishCapture(); }, 250);
+  if (targets.every(t => t.done)) setTimeout(() => { $('#zoomBox').style.display = 'none'; finishCapture(); }, 250);
 }
 
 $('#btnStart').onclick = () => {
@@ -1040,7 +1057,7 @@ $('#btnUndo').onclick = () => {
   const fr = frames.pop(); if (!fr) return;
   fr.target.done = false; updateCount();
   $('#floorSheet').style.display = 'none'; floorStep = 0;
-  if (fr.floor) offerFloor();
+  if (fr.floor && !fr.target.zoomFloor) offerFloor();
 };
 $('#btnCancel').onclick = () => {
   if (frames.length > 3) { askConfirm('Discard this capture?', 'Discard').then(ok => { if (ok) { stopStream(); frames = []; show('home'); } }); return; }
@@ -2527,7 +2544,7 @@ function feDraw() {
   });
 }
 function feSync() {
-  $('#feMask').value = FE.mask; $('#feMaskV').textContent = Math.round(Math.atan(FE.mask) * R2D) + '° around straight down';
+  $('#feMask').value = FE.mask; $('#feMaskV').textContent = Math.round(Math.atan(FE.mask) * R2D) + '°';
   $('#feFeather').value = FE.feather; $('#feFeatherV').textContent = Math.round(FE.feather * 100) + '%';
   $('#feSize').value = Math.log(FE.t.s); $('#feRot').value = Math.round(wrapDeg(FE.t.rot * R2D) * 2) / 2; $('#feRotV').textContent = Math.round(wrapDeg(FE.t.rot * R2D)) + '°';
   $('#feBright').value = FE.bright; $('#feContrast').value = FE.contrast;
@@ -2536,9 +2553,16 @@ function feSync() {
   $('#fePhotoCtl').style.display = (FE.mode === 'shot' || FE.mode === 'photo') ? '' : 'none';
   $('#feColorCtl').style.display = FE.mode === 'color' ? '' : 'none';
   $('#feRevert').style.display = FE.item.original ? '' : 'none';
-  $('#feHint').textContent = feMovable() ? 'Drag the photo with one finger; pinch to zoom, twist with two fingers to turn.'
-    : (FE.mode === 'blur' || FE.mode === 'color') ? 'Nothing to move in this mode: choose “Floor shot” or “Other photo” to place a photo.'
-    : 'Choose a photo first.';
+  $('#feModeText').textContent = {
+    shot: FE.item.floorShot ? 'The photo of the floor taken at the end of the capture, already placed. Line it up so the floor pattern continues across the circle edge.' : '',
+    photo: FE.src ? 'Your photo. Line it up so the floor pattern continues across the circle edge.'
+                  : 'Any photo of a floor from your library, for example a close-up of the same tiles, carpet or wood taken elsewhere in the room.',
+    blur: 'Fills the circle with a blur of the floor around it. Quick, and fine on plain floors.',
+    color: 'A plain disc, with your text if you like (a logo name, for example).'
+  }[FE.mode] + (!FE.item.floorShot && FE.mode !== 'shot' ? ' (“Floor photo” is only available for spheres taken on a tripod with the latest version: it is the last, zoomed-in shot of the capture.)' : '');
+  $('#feHint').textContent = feMovable() ? 'Move: drag with one finger · Zoom: pinch · Turn: twist with two fingers'
+    : (FE.mode === 'photo' || FE.mode === 'shot') ? 'Choose a photo first.' : '';
+  $('#feHint').style.display = $('#feHint').textContent ? '' : 'none';
 }
 const feChanged = () => { feLayerDirty = true; feSync(); feDraw(); };
 // the view shows about 3× the circle, so the tripod area is big enough to work on
