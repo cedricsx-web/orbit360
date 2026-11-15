@@ -708,7 +708,11 @@ function makeTargets(lensKey, onTripod, downMain) {
 }
 // with more than one camera in the plan, each shot waits for its own camera
 const multiCam = () => new Set(targets.map(t => t.cam)).size > 1;
-const eligible = (t) => !t.done && (!multiCam() || t.cam === curCam);
+// shooting order: horizon, bottom row (and straight down), top row, ceiling, then the floor photo
+const phaseOf = (t) => t.zoomFloor ? 4 : t.pitch === 0 ? 0 : t.pitch < 0 ? 1 : t.pitch >= 90 ? 3 : 2;
+const PHASE_NAME = ['the horizon', 'the bottom row', 'the top row', 'the ceiling', 'the floor'];
+const curPhase = () => { let p = 9; for (const t of targets) if (!t.done) p = Math.min(p, phaseOf(t)); return p; };
+const eligible = (t) => !t.done && phaseOf(t) === curPhase() && (!multiCam() || t.cam === curCam);
 let downMain = store('downMain') !== '0';
 const effLens = () => (lens === 'ultra' && camIds.ultra) ? 'ultra' : 'main';   // ultra-wide only if this iPhone offers it
 /* Floor patch: after the tripod shots, the tripod is removed and 1–2 photos of the floor are taken by hand,
@@ -955,21 +959,25 @@ function tick(now) {
 let nextCam = null;
 function promptSwitch() {
   const left = targets.filter(t => !t.done);
-  if (!left.length || camBusy || camPrompted === curCam) return;
-  // back lens first, then the 1× camera, then the front camera: as few switches as possible
-  nextCam = [lens, 'main', 'ultra', 'front'].find(c => c !== curCam && left.some(t => t.cam === c)) || left[0].cam;
+  if (!left.length || camBusy || camPrompted === curCam + curPhase()) return;
+  // the camera the next part of the order needs
+  const ph = curPhase(), part = left.filter(t => phaseOf(t) === ph);
+  nextCam = (part.find(t => t.cam !== curCam) || part[0]).cam;
   if (nextCam === curCam) return;
-  camPrompted = curCam;
-  const ceil = tripod === 'ceil';
-  const T = {
-    front: [ceil ? 'Now the ceiling' : 'Now the floor',
+  camPrompted = curCam + ph;
+  const ceil = tripod === 'ceil', what = PHASE_NAME[ph];
+  const T = ph === 4 ? ['Last: the floor', nextCam === 'front'
+      ? 'Switch to the front camera, then point the phone straight up on the tripod: the front camera looks at the floor.'
+      : 'Switch back to the main camera (1×), then lay the phone flat, screen up, on the tripod: the back camera looks at the floor.',
+      nextCam === 'front' ? '⟲ Switch to the front camera' : '⟲ Switch to the main camera (1×)'] : {
+    front: [ceil ? 'Now ' + what : 'Now the floor',
       ceil ? 'Switch to the front camera. Then tilt the phone DOWN to each dot: the front camera, on the screen side, photographs the ceiling.'
            : 'Switch to the front camera. Then tilt the phone UP to each dot: the front camera, on the screen side, photographs the floor.',
       '⟲ Switch to the front camera'],
-    main: curCam === 'ultra'
-      ? ['Now the downward shots', 'Switching to the main camera (1×). It sees less, so the tripod legs stay out of the picture. Tilt down to each dot.', '⟲ Switch to the main camera (1×)']
-      : ['Main camera (1×)', 'A few shots are still missing for the main camera.', '⟲ Switch to the main camera (1×)'],
-    ultra: ['Ultra-wide (0.5×)', 'A few shots are still missing for the ultra-wide camera.', '⟲ Switch to the ultra-wide (0.5×)']
+    main: curCam === 'ultra' && ph === 1
+      ? ['Now the bottom row', 'Switching to the main camera (1×). It sees less, so the tripod legs stay out of the picture. Tilt down to each dot.', '⟲ Switch to the main camera (1×)']
+      : ['Now ' + what, 'This part is taken with the main camera (1×).', '⟲ Switch to the main camera (1×)'],
+    ultra: ['Now ' + what, 'This part is taken with the ultra-wide camera (0.5×).', '⟲ Switch to the ultra-wide (0.5×)']
   }[nextCam];
   $('#camTitle').textContent = T[0]; $('#camText').textContent = T[1]; $('#btnCamSwitch').textContent = T[2];
   $('#camSheet').style.display = 'block';
@@ -1093,7 +1101,8 @@ function workerMain() {
   let frames = [];
   let ROW0 = 0, ROW1 = 1e9;     // only these output rows are drawn (the final picture is made in strips to save memory)
   let BLEND_POW = 3;
-  let SAMPLE = 1;                // measure on every Nth pixel only (for speed)             // higher = each spot comes from the shot that sees it best (sharper, seams may show)
+  let SAMPLE = 1;                // measure on every Nth pixel only (for speed)
+  let FLOOR_USE = 1;             // part of the zoomed floor photo's radius that is used (zooming in after the capture)             // higher = each spot comes from the shot that sees it best (sharper, seams may show)
 
   self.onmessage = (ev) => {
     const m = ev.data;
@@ -1202,7 +1211,7 @@ function workerMain() {
         // zoomed tripod shot: full strength up to near its edges (it must fully hide the tripod in the other shots)
         const fe = f.mounted ? 1 : Math.max(0, Math.min(1, (py + 0.55) / 0.65));
         // zoomed tripod shot: only its round middle is used (the side photos keep the rest of the floor)
-        const rr = f.mounted ? Math.hypot(px * tx, py * ty) / Math.min(tx, ty) : 0;
+        const rr = f.mounted ? Math.hypot(px * tx, py * ty) / (Math.min(tx, ty) * FLOOR_USE) : 0;
         const wt = f.mounted ? Math.max(0, Math.min(1, (1 - rr) / 0.3))
                              : fe * fe * (3 - 2 * fe) * (1 - px * px) * (1 - py * py);
         if (wt <= 0) continue;
@@ -1599,9 +1608,10 @@ function workerMain() {
       if (opts.gain) mGains = estimateGains(main, mParams);
     }
     const gains = lows.map(f => f.floor ? [1, 1, 1] : mGains[main.indexOf(f)]);
+    FLOOR_USE = Math.max(0.2, Math.min(1, opts.floorUse || 1));
     let cap = opts.floorCap || 28; const floorInfo = [];
     // the zoomed shot can only replace what it sees: the patch stops just inside its edge
-    floors.forEach(ff => { if (ff.mounted) { const fp = frameParams(ff, fovs); cap = Math.atan(Math.min(fp.tx, fp.ty)) * 180 / PI + 4; } });   // its own round edge decides where it stops
+    floors.forEach(ff => { if (ff.mounted) { const fp = frameParams(ff, fovs); cap = Math.atan(Math.min(fp.tx, fp.ty) * FLOOR_USE) * 180 / PI + 4; } });   // its own round edge decides where it stops
     floors.forEach((ff, n) => {
       progress('Lining up the floor…', n / floors.length);
       const same = main.map((f, i) => f.lens === ff.lens ? mGains[i] : null).filter(Boolean);
@@ -1657,7 +1667,9 @@ function finishCapture() {
   frames = [];
   newWorker();
   worker.postMessage({ type: 'frames', frames: shots }, shots.map(s => s.data.buffer));
-  session = { id: Date.now(), hasFrames: true, heading: captureHeading, lenses, hasFloor, floorCap: 28, floorShotP };
+  const mz = shots.find(f => f.mounted);
+  session = { id: Date.now(), hasFrames: true, heading: captureHeading, lenses, hasFloor, floorCap: 28, floorShotP,
+    floorZoomShot: mz ? 1 / (mz.crop || 1) : 0, floorZoomUse: mz ? 1 / (mz.crop || 1) : 0 };
   runStitch(Object.assign(stitchPrefs(), { fovs: Object.assign({}, fovs), autoLenses: lenses.filter(l => !isCal(l)), gain: true, floorCap: 28 }));
 }
 
@@ -2061,10 +2073,14 @@ function syncAdjust() {
   const R = { main: [50, 90], ultra: [80, 125], front: [50, 100] };
   box.innerHTML = ls.map(l => `<label class="field">${LENS_NAME[l]} field of view: <b data-v="${l}">${(+fovs[l]).toFixed(1)}°</b>
     <input type="range" data-lens="${l}" min="${R[l][0]}" max="${R[l][1]}" step="0.5" value="${fovs[l]}"></label>`).join('');
-  if (session && session.hasFloor) box.innerHTML += `<label class="field">Floor patch size (hides the tripod): <b id="capV">${session.floorCap}°</b>
+  if (session && session.floorZoomShot) box.innerHTML += `<label class="field">Floor photo zoom: <b id="fzV">${session.floorZoomUse.toFixed(1)}×</b>
+    <input type="range" id="fzRange" min="${session.floorZoomShot}" max="${Math.max(4, session.floorZoomShot + 1)}" step="0.1" value="${session.floorZoomUse}">
+    <span style="font-size:12px">Zoom in more if bits of the tripod show in the middle of the floor.</span></label>`;
+  else if (session && session.hasFloor) box.innerHTML += `<label class="field">Floor patch size (hides the tripod): <b id="capV">${session.floorCap}°</b>
     <input type="range" id="capRange" min="12" max="45" step="1" value="${session.floorCap}"></label>`;
   box.querySelectorAll('input[data-lens]').forEach(i => i.oninput = () => { box.querySelector(`[data-v=${i.dataset.lens}]`).textContent = (+i.value).toFixed(1) + '°'; });
   const cr = $('#capRange'); if (cr) cr.oninput = () => { $('#capV').textContent = cr.value + '°'; };
+  const fz = $('#fzRange'); if (fz) fz.oninput = () => { $('#fzV').textContent = (+fz.value).toFixed(1) + '×'; };
   const sp = stitchPrefs(); $('#resSel').value = String(sp.width); $('#blendSel').value = sp.blend; $('#alignChk').checked = sp.align;
 }
 $('#btnAdjust').onclick = () => { syncAdjust(); $('#adjustModal').classList.add('on'); };
@@ -2076,7 +2092,9 @@ function restitch(auto) {
   const blend = $('#blendSel').value, align = $('#alignChk').checked; store('blend', blend); store('align', align ? '1' : '0');
   if (!auto) $('#fovBox').querySelectorAll('input[data-lens]').forEach(i => setFov(i.dataset.lens, parseFloat(i.value), true));
   const cr = $('#capRange'); if (cr && session) session.floorCap = +cr.value;
-  runStitch({ fovs: Object.assign({}, fovs), autoLenses: auto ? ((session && session.lenses) || ['main']) : [], gain: $('#gainChk').checked, width, blend, align, floorCap: (session && session.floorCap) || 28 });
+  const fz = $('#fzRange'); if (fz && session) session.floorZoomUse = +fz.value;
+  runStitch({ fovs: Object.assign({}, fovs), autoLenses: auto ? ((session && session.lenses) || ['main']) : [], gain: $('#gainChk').checked, width, blend, align,
+    floorCap: (session && session.floorCap) || 28, floorUse: session && session.floorZoomShot ? session.floorZoomShot / session.floorZoomUse : 1 });
 }
 $('#btnRestitch').onclick = () => restitch(false);
 $('#btnAuto').onclick = () => restitch(true);
@@ -2693,6 +2711,18 @@ async function openFloorEditor(item) {
   show('floorEd'); feChanged();
 }
 // apply to the full-size sphere
+// Safari keeps the blobs read from the gallery as references to the stored record: when that record is
+// overwritten they can vanish. Saved items therefore get fresh in-memory copies of their pictures.
+async function copyBlob(b) { return b ? new Blob([await b.arrayBuffer()], { type: b.type || 'image/jpeg' }) : b; }
+async function freshItem(it) {
+  const o = Object.assign({}, it);
+  for (const k of ['blob', 'thumb', 'original', 'floorShot']) if (o[k] instanceof Blob) o[k] = await copyBlob(o[k]);
+  return o;
+}
+async function thumbOf(blob) {
+  const im = await loadImg(blob), t = document.createElement('canvas'); t.width = 480; t.height = 240;
+  t.getContext('2d').drawImage(im, 0, 0, 480, 240); return canvasToBlob(t, 'image/jpeg', 0.8);
+}
 async function applyFloor() {
   const it = FE.item, W = FE.W, H = FE.H;
   toast('Applying…', 4000);
@@ -2731,10 +2761,10 @@ async function applyFloor() {
   const t = document.createElement('canvas'); t.width = 480; t.height = 240; t.getContext('2d').drawImage(c, 0, 0, 480, 240);
   const thumb = await canvasToBlob(t, 'image/jpeg', 0.8);
   c.width = c.height = 1;
-  const upd = Object.assign({}, it, { blob, thumb });
+  const upd = await freshItem(Object.assign({}, it, { blob, thumb }));
   if (it.imported) { upd.id = Date.now(); delete upd.imported; }            // an opened file becomes a new sphere in the gallery
-  else if (!it.original) upd.original = it.blob;                          // keep the untouched version once
-  try { await DB.put(upd); } catch (e) { toast('Could not save (storage full?).', 4000); }
+  else if (!it.original) upd.original = await copyBlob(it.blob);          // keep the untouched version once
+  try { await DB.put(upd); } catch (e) { toast('Could not save (storage full?).', 4000); return; }
   FE.eq = null; FE.bg = null; feLayer = null;
   renderGallery();
   openViewer(upd, false);
@@ -2857,9 +2887,15 @@ $('#feApply').onclick = () => applyFloor().catch(e => toast('Could not apply: ' 
 $('#feRevert').onclick = async () => {
   const it = FE.item; if (!it.original) return;
   if (!(await askConfirm('Restore the floor as it was first stitched?', 'Restore'))) return;
-  const upd = Object.assign({}, it, { blob: it.original }); delete upd.original;
-  try { await DB.put(upd); } catch (e) {}
-  renderGallery(); openViewer(upd, false);
+  try {
+    const upd = await freshItem(it);
+    upd.blob = upd.original; delete upd.original;
+    upd.thumb = await thumbOf(upd.blob);
+    await DB.put(upd);
+    FE.eq = null; FE.bg = null; feLayer = null;
+    renderGallery(); openViewer(upd, false);
+    toast('Original floor restored.', 2500);
+  } catch (e) { toast('Could not restore: ' + (e.message || e), 4000); }
 };
 $('#btnFloor').onclick = () => openFloorEditor(current).catch(e => toast('Could not open the floor: ' + (e.message || e), 4000));
 
