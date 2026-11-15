@@ -190,6 +190,7 @@
   <div id="zoomBox" style="position:absolute;left:14px;right:14px;bottom:calc(var(--sb) + 112px);z-index:3;display:none;background:rgba(0,0,0,.6);border-radius:14px;padding:8px 12px;font-size:14px">
     <b>Floor photo.</b> Only what's inside the orange frame is kept. Zoom in until <b>no part of the tripod</b> is inside it: <b id="zoomV">2.0×</b>
     <input id="zoomRange" type="range" min="1" max="3.5" step="0.1" value="2" style="width:100%;accent-color:#4fd1c5">
+    <button id="btnFloorShoot" class="btn primary" style="width:100%;margin-top:6px">📸 Take the floor photo</button>
   </div>
   <div class="bottombar">
     <canvas id="minimap" width="300" height="150"></canvas>
@@ -655,9 +656,16 @@ function sharpness() {
   return s2 / n - (s / n) ** 2;
 }
 let burst = null, vfcFlag = true;
+let floorArmed = false;   // the floor photo waits for the "Take the floor photo" button (time to set the zoom)
 let floorZoom = parseFloat(store('floorZoom2')) || 2;
 $('#zoomRange').value = floorZoom; $('#zoomV').textContent = floorZoom.toFixed(1) + '×';
-$('#zoomRange').oninput = (e) => { floorZoom = +e.target.value; store('floorZoom2', String(floorZoom)); $('#zoomV').textContent = floorZoom.toFixed(1) + '×'; burst = null; holdStart = 0; };
+$('#zoomRange').oninput = (e) => { floorZoom = +e.target.value; store('floorZoom2', String(floorZoom)); $('#zoomV').textContent = floorZoom.toFixed(1) + '×'; burst = null; holdStart = 0; floorArmed = false; updateFloorBtn(); };
+function updateFloorBtn() {
+  const b = $('#btnFloorShoot');
+  b.textContent = floorArmed ? 'Hold still: taking the photo…' : '📸 Take the floor photo';
+  b.disabled = floorArmed;
+}
+$('#btnFloorShoot').onclick = () => { floorArmed = true; holdStart = 0; updateFloorBtn(); };
 function watchFrames() {             // new camera frames (where the browser can tell us)
   if (!video.requestVideoFrameCallback) return;
   const cb = () => { vfcFlag = true; if (capturing) video.requestVideoFrameCallback(cb); };
@@ -810,7 +818,7 @@ async function startCapture() {
     const msg = (e && e.name === 'NotAllowedError') ? 'Camera access was refused. Allow camera access for this site (Settings › Safari › Camera) and try again.' : (e.message || String(e));
     $('#homeErr').textContent = msg; stopStream(); return;
   }
-  targets = []; frames = []; yaw0 = null; holdStart = 0; lastF = null; camPrompted = null; floorStep = 0;
+  targets = []; frames = []; yaw0 = null; holdStart = 0; lastF = null; camPrompted = null; floorStep = 0; floorArmed = false; updateFloorBtn();
   $('#camSheet').style.display = 'none'; $('#floorSheet').style.display = 'none'; $('#zoomBox').style.display = 'none';
   updateCamUI();
   $('#startSheet').style.display = 'block';
@@ -921,7 +929,7 @@ function tick(now) {
       octx.strokeStyle = '#4fd1c5'; octx.lineWidth = 6;
       octx.beginPath(); octx.arc(cx, cy, 24, 0, Math.PI * 2); octx.stroke();
       if (now - burst.start >= BURST_MS && burst.img) { takeShot(best, burst.R, burst.img); burst = null; holdStart = 0; }
-    } else if (aligned && still) {
+    } else if (aligned && still && (!best.zoomFloor || floorArmed)) {
       if (!holdStart) holdStart = now;
       const prog = Math.min(1, (now - holdStart) / settle);
       octx.strokeStyle = '#4fd1c5'; octx.lineWidth = 6;
@@ -948,7 +956,8 @@ function tick(now) {
     }
     $('#hintText').textContent = hintFor(best, f, aligned, still);
     $('#zoomBox').style.display = best.zoomFloor ? 'block' : 'none';
-    if (best.zoomFloor) $('#hintText').textContent = burst ? 'Taking the floor photo…' : aligned ? (still ? 'Hold…' : 'Let go of the phone: waiting for it to stop moving…')
+    if (best.zoomFloor) $('#hintText').textContent = burst ? 'Taking the floor photo…'
+      : aligned ? (!floorArmed ? 'Set the zoom, then tap “Take the floor photo”' : still ? 'Hold…' : 'Let go of the phone: waiting for it to stop moving…')
       : (best.cam === 'front' ? 'Last shot: the floor. Point the phone straight up on the tripod (the front camera looks down)'
                                : 'Last shot: the floor. Lay the phone flat, screen up, on the tripod');
     else if (best.floor) $('#hintText').textContent = aligned ? (still ? 'Hold…' : 'Hold still…') : 'Point the camera straight down at the spot where the tripod was';
@@ -1049,6 +1058,7 @@ function grabFrame(zoom) {
   return img;
 }
 function takeShot(target, R, img) {
+  if (target.zoomFloor) { floorArmed = false; updateFloorBtn(); }
   img = img || grabFrame();
   const w = img.width, h = img.height;
   frames.push({ w, h, data: img.data, R: R.slice(), target, lens: curCam, floor: !!target.floor,
@@ -1073,6 +1083,7 @@ $('#btnStart').onclick = () => {
   $('#hint').style.display = 'block';
 };
 $('#btnUndo').onclick = () => {
+  floorArmed = false; updateFloorBtn();
   const fr = frames.pop(); if (!fr) return;
   fr.target.done = false; updateCount();
   $('#floorSheet').style.display = 'none'; floorStep = 0;
