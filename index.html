@@ -246,7 +246,7 @@
   <div id="crosshair"></div>
   <div class="topbar">
     <button id="btnBack" class="btn ghost small">‹ Back</button>
-    <div id="viewerTitle" class="pill">360°</div>
+    <button id="viewerTitle" class="pill" style="max-width:55vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">360°</button>
     <button id="btnGyro" class="btn ghost small toggle">Gyro</button>
   </div>
   <!-- tour editor -->
@@ -416,7 +416,7 @@
 <div id="sphereModal" class="modal">
   <div class="sheet">
     <h3>This sphere</h3>
-    <label class="field">Name (shown on the floor circles)
+    <label class="field">Name in this tour (shown on the floor circles; empty = the sphere's own name)
       <input id="sphName" class="txt" type="text" maxlength="40">
     </label>
     <label class="field">Turn this sphere to line it up: <b id="sphRotVal">0°</b>
@@ -600,7 +600,8 @@ async function renderGallery() {
     const u = URL.createObjectURL(it.thumb || it.blob); thumbUrls.push(u);
     const d = document.createElement('button'); d.className = 'card';
     const when = new Date(it.id);
-    d.innerHTML = `<img alt="360 photo" src="${u}"><span>${when.toLocaleDateString()} ${when.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>`;
+    d.innerHTML = `<img alt="360 photo" src="${u}"><span></span>`;
+    d.querySelector('span').textContent = it.name || whenText(when.getTime());
     d.onclick = () => openViewer(it, false);
     g.appendChild(d);
   }
@@ -1095,6 +1096,30 @@ $('#btnCancel').onclick = () => {
 };
 $('#btnDone').onclick = () => finishCapture();
 
+// ask for a short text (sphere names); resolves to the text, or null if cancelled
+function askText(title, value, okLabel = 'Save') {
+  return new Promise(res => {
+    const m = document.createElement('div'); m.className = 'modal on';
+    m.innerHTML = `<div class="sheet"><h3></h3><input class="txt" type="text" maxlength="60" style="margin:6px 0 12px">
+      <div class="row"><button class="btn" data-v="0">Cancel</button><button class="btn primary" data-v="1"></button></div></div>`;
+    m.querySelector('h3').textContent = title; m.querySelector('[data-v="1"]').textContent = okLabel;
+    const inp = m.querySelector('input'); inp.value = value || '';
+    const done = (ok) => { m.remove(); res(ok ? inp.value.trim() : null); };
+    m.onclick = (e) => { const v = e.target.getAttribute && e.target.getAttribute('data-v'); if (v === '0' || v === '1') done(v === '1'); };
+    inp.onkeydown = (e) => { if (e.key === 'Enter') done(true); };
+    document.body.appendChild(m);
+    setTimeout(() => { inp.focus(); inp.select(); }, 50);
+  });
+}
+const whenText = (id) => { const d = new Date(id); return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }); };
+const sphereName = (it) => (it && it.name) || (it && it.imported ? 'Imported 360°' : it ? whenText(it.id) : '');
+async function renameSphere(it) {
+  const name = await askText('Name this sphere', it.name || '');
+  if (name === null) return null;
+  it.name = name;
+  try { const fresh = await freshItem(it); await DB.put(fresh); Object.assign(it, fresh); } catch (e) { toast('Could not save the name.'); }
+  return name;
+}
 function askConfirm(text, okLabel) {
   return new Promise(res => {
     const m = document.createElement('div'); m.className = 'modal on';
@@ -1702,6 +1727,7 @@ function runStitch(opts) {
       (opts.autoLenses || []).forEach(l => { if (m.fovs && m.fovs[l]) setFov(l, m.fovs[l], true); });
       try {
         const item = await buildItem(session.id, m.W, m.H, m.data, m.fovs, session.heading);
+        try { const old = await DB.get(session.id); if (old && old.name) item.name = old.name; } catch (e) {}
         const fsh = session.floorShotP ? await session.floorShotP : null;
         if (fsh) { item.floorShot = fsh.blob; item.floorMeta = fsh.meta; }
         try { await DB.put(item); } catch (e) { toast('Could not save to the in-app gallery (storage full?). Use Save / Share.', 4000); }
@@ -2037,11 +2063,17 @@ async function openViewer(item, fresh) {
   catch (e) { toast(e.message, 4000); show('home'); return; }
   viewer.yaw = 0; viewer.pitch = 0; viewer.fov = 80;
   viewer.start();
-  $('#viewerTitle').textContent = item.imported ? 'Imported 360°' : new Date(item.id).toLocaleDateString();
+  $('#viewerTitle').textContent = sphereName(item) + (item.imported ? '' : ' ✎');
   const canAdjust = !!(session && session.hasFrames && session.id === item.id);
   $('#btnAdjust').style.display = canAdjust ? '' : 'none';
   $('#btnDelete').style.display = item.imported ? 'none' : '';
-  if (fresh) toast('Saved in Orbit 360. Tap Save / Share to put it in Photos.', 3500);
+  if (fresh && !item.name) {
+    setTimeout(async () => {
+      const n = await renameSphere(item);
+      if (n !== null && current === item) { $('#viewerTitle').textContent = sphereName(item) + ' ✎'; renderGallery(); }
+      toast('Saved in Orbit 360. Tap Save / Share to put it in Photos.', 3500);
+    }, 400);
+  } else if (fresh) toast('Saved in Orbit 360. Tap Save / Share to put it in Photos.', 3500);
 }
 
 function leaveViewer() {
@@ -2050,6 +2082,11 @@ function leaveViewer() {
   show('home'); renderGallery();
 }
 $('#btnBack').onclick = () => leaveViewer();
+$('#viewerTitle').onclick = async () => {
+  if (tour || !current || current.imported) return;
+  const n = await renameSphere(current);
+  if (n !== null) { $('#viewerTitle').textContent = sphereName(current) + ' ✎'; renderGallery(); }
+};
 $('#btnGyro').onclick = async () => {
   if (!viewer) return;
   if (!viewer.gyro) { try { await ensureMotion(); } catch (e) { toast(e.message, 4000); return; } }
@@ -2066,7 +2103,8 @@ async function saveFile(blob, name, title) {
 }
 $('#btnSave').onclick = () => {
   if (!current) return;
-  saveFile(current.blob, 'orbit360-' + new Date(current.id).toISOString().slice(0, 19).replace(/[:T]/g, '-') + '.jpg', '360° photo');
+  const slug = (current.name || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  saveFile(current.blob, (slug || 'orbit360-' + new Date(current.id).toISOString().slice(0, 19).replace(/[:T]/g, '-')) + '.jpg', current.name || '360° photo');
 };
 $('#btnFlat').onclick = () => { if (!currentUrl) return; $('#flatImg').src = currentUrl; $('#flatModal').classList.add('on'); };
 $('#btnFlatClose').onclick = () => $('#flatModal').classList.remove('on');
@@ -2121,7 +2159,7 @@ let tour = null, tourMode = null, tourNode = null, placing = null, walking = fal
 let tourSrc = new Map(), stripUrls = new Map();
 
 function tn(id) { return tour && tour.nodes.find(n => n.pano === id); }
-function nodeLabel(id) { const i = tour.nodes.findIndex(n => n.pano === id); const n = tour.nodes[i]; return (n && n.name) || ('Sphere ' + (i + 1)); }
+function nodeLabel(id) { const i = tour.nodes.findIndex(n => n.pano === id); const n = tour.nodes[i], src = tourSrc.get(id); return (n && n.name) || (src && src.name) || ('Sphere ' + (i + 1)); }
 function linkVec(l) {
   const n = tn(l.from), h = tour.camHeight;
   const th = (n.heading + l.lon) * D2R, lat = Math.min(l.lat, -1.5) * D2R;
@@ -2147,7 +2185,7 @@ async function loadTourSources() {
     if (tourSrc.has(n.pano)) continue;
     let it = galleryItems.find(i => i.id === n.pano);
     if (!it) { try { it = await DB.get(n.pano); } catch (e) { it = null; } }
-    if (it) tourSrc.set(n.pano, { blob: it.blob, thumb: it.thumb || it.blob, key: 'p' + it.id + ':' + it.blob.size });
+    if (it) tourSrc.set(n.pano, { blob: it.blob, thumb: it.thumb || it.blob, key: 'p' + it.id + ':' + it.blob.size, name: it.name || '' });
   }
 }
 
@@ -2382,7 +2420,8 @@ async function openPicker(mode) {
   const refresh = () => [...g.children].forEach(b => {
     const k = pickSel.indexOf(+b.dataset.id);
     b.classList.toggle('sel', k >= 0);
-    b.querySelector('.num').textContent = k >= 0 ? String(k + 1) : new Date(+b.dataset.id).toLocaleDateString();
+    const it = avail.find(x => x.id === +b.dataset.id);
+    b.querySelector('.num').textContent = (k >= 0 ? (k + 1) + ' · ' : '') + sphereName(it);
   });
   for (const it of avail) {
     const u = URL.createObjectURL(it.thumb || it.blob); pickUrls.push(u);
@@ -2431,7 +2470,7 @@ async function exportTour() {
     const nodes = [];
     for (const n of tour.nodes) {
       const s = tourSrc.get(n.pano);
-      nodes.push({ pano: n.pano, heading: n.heading, name: n.name || '', img: await blobToDataURL(s.blob) });
+      nodes.push({ pano: n.pano, heading: n.heading, name: n.name || s.name || '', img: await blobToDataURL(s.blob) });
     }
     const data = { name: tour.name, camHeight: tour.camHeight, space: tour.space, speed: tour.speed, start: tour.start, nodes, links: tour.links };
     const inject = '<scr' + 'ipt>window.ORBIT_TOUR=' + JSON.stringify(data).replace(/</g, '\\u003c') + ';<\/script>';
